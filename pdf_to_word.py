@@ -244,11 +244,9 @@ def write_song(doc, blocks, first=False):
         divider_para(doc)
 
     for block_idx, (btype, lines) in enumerate(blocks):
-        if block_idx > 0:
-            empty_para(doc)
         for line in lines:
             if line == "":
-                empty_para(doc)
+                pass  # preskoči prazne retke unutar bloka
             elif btype == "chorus":
                 chorus_para(doc, line)
             else:
