@@ -28,7 +28,7 @@ from docx.oxml import OxmlElement
 
 
 FONT_NAME = "Times New Roman"
-FONT_SIZE = 8
+FONT_SIZE = 10
 
 CHORUS_INDENT = Twips(720)   # ~1.27 cm uvlaka za refren
 
