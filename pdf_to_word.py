@@ -55,7 +55,7 @@ pdfmetrics.registerFontFamily(
 
 
 FONT_NAME = "Times New Roman"
-FONT_SIZE = 10
+FONT_SIZE = 9
 
 CHORUS_INDENT = Twips(720)   # ~1.27 cm uvlaka za refren
 
@@ -95,7 +95,7 @@ def set_two_columns(doc):
     # Dvije kolone s razmakom
     sectPr = section._sectPr
     cols = OxmlElement("w:cols")
-    cols.set(qn("w:num"), "2")
+    cols.set(qn("w:num"), "3")
     cols.set(qn("w:space"), "720")  # ~1.27 cm razmak između kolona
     cols.set(qn("w:equalWidth"), "1")
     sectPr.append(cols)
@@ -369,7 +369,7 @@ def convert_pdf_to_pdf(songs, pdf_out_path: str):
     # BalancedColumns raspoređuje sadržaj u dvije kolone
     two_col = BalancedColumns(
         story_inner,
-        nCols=2,
+        nCols=3,
         needed=1 * cm,
         spaceBefore=0,
         spaceAfter=0,
