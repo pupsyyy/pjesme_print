@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Konvertira PDF s tekstovima pjesama u Word dokument.
+Konvertira PDF s tekstovima pjesama u Word i/ili PDF dokument.
 
 Format izlaza:
   - A4 landscape, dvije kolone
@@ -11,8 +11,9 @@ Format izlaza:
   - Times New Roman 10pt
 
 Korištenje:
-    python pdf_to_word.py ulaz.pdf izlaz.docx
-    python pdf_to_word.py ulaz.pdf
+    python pdf_to_word.py ulaz.pdf             # generira .docx i .pdf
+    python pdf_to_word.py ulaz.pdf izlaz.docx  # samo .docx
+    python pdf_to_word.py ulaz.pdf izlaz.pdf   # samo .pdf
 """
 
 import sys
@@ -25,6 +26,16 @@ from docx.shared import Pt, Cm, Twips, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.units import cm, mm
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib import colors
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, HRFlowable,
+    BalancedColumns,
+)
+from reportlab.platypus.flowables import Flowable
 
 
 FONT_NAME = "Times New Roman"
@@ -269,12 +280,95 @@ def setup_document():
     return doc
 
 
-# ── Glavni program ─────────────────────────────────────────────────────────────
+# ── PDF generiranje (reportlab) ────────────────────────────────────────────────
 
-def convert_pdf_to_docx(pdf_path: str, docx_path: str):
-    print(f"Učitavam: {pdf_path}")
+# Stilovi za reportlab
+_style_verse = ParagraphStyle(
+    "verse",
+    fontName="Times-Roman",
+    fontSize=FONT_SIZE,
+    leading=FONT_SIZE * 1.2,
+    leftIndent=0,
+    spaceAfter=0,
+    spaceBefore=0,
+)
+
+_style_chorus = ParagraphStyle(
+    "chorus",
+    fontName="Times-BoldItalic",
+    fontSize=FONT_SIZE,
+    leading=FONT_SIZE * 1.2,
+    leftIndent=18,   # ~0.63 cm uvlaka
+    spaceAfter=0,
+    spaceBefore=0,
+)
+
+_style_divider = ParagraphStyle(
+    "divider",
+    fontName="Times-Roman",
+    fontSize=FONT_SIZE,
+    leading=FONT_SIZE * 1.4,
+    spaceAfter=2,
+    spaceBefore=2,
+)
+
+
+def songs_to_flowables(songs):
+    """Pretvori listu songs u reportlab flowable elemente."""
+    story = []
+    for song_idx, blocks in enumerate(songs):
+        if song_idx > 0:
+            story.append(Paragraph(DIVIDER, _style_divider))
+
+        for btype, lines in blocks:
+            style = _style_chorus if btype == "chorus" else _style_verse
+            for line in lines:
+                if line and line != "":
+                    # Escapaj XML znakove
+                    safe = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    story.append(Paragraph(safe, style))
+
+    return story
+
+
+def convert_pdf_to_pdf(songs, pdf_out_path: str):
+    """Generiraj PDF u A4 landscape s dvije kolone."""
+    page_w, page_h = landscape(A4)
+    margin = 1.5 * cm
+    col_gap = 1.0 * cm
+
+    doc = SimpleDocTemplate(
+        pdf_out_path,
+        pagesize=landscape(A4),
+        leftMargin=margin,
+        rightMargin=margin,
+        topMargin=margin,
+        bottomMargin=margin,
+    )
+
+    col_width = (page_w - 2 * margin - col_gap) / 2
+
+    story_inner = songs_to_flowables(songs)
+
+    # BalancedColumns raspoređuje sadržaj u dvije kolone
+    two_col = BalancedColumns(
+        story_inner,
+        nCols=2,
+        needed=1 * cm,
+        spaceBefore=0,
+        spaceAfter=0,
+        leftPadding=0,
+        rightPadding=col_gap / 2,
+    )
+
+    doc.build([two_col])
+    print(f"Spremi kao: {pdf_out_path}")
+
+
+# ── Parsiranje PDF-a ───────────────────────────────────────────────────────────
+
+def load_songs(pdf_path: str):
     songs = []
-
     with pdfplumber.open(pdf_path) as pdf:
         for page_num, page in enumerate(pdf.pages, 1):
             blocks = parse_page(page)
@@ -283,27 +377,53 @@ def convert_pdf_to_docx(pdf_path: str, docx_path: str):
                 print(f"  Stranica {page_num}: OK ({len(blocks)} blok(ova))")
             else:
                 print(f"  Stranica {page_num}: (preskočena)")
-
-    if not songs:
-        print("Nije pronađena nijedna pjesma!")
-        return
-
-    doc = setup_document()
-
-    for idx, blocks in enumerate(songs):
-        write_song(doc, blocks, first=(idx == 0))
-
-    doc.save(docx_path)
-    print(f"\nSpremi kao: {docx_path}")
-    print(f"Ukupno pjesama: {len(songs)}")
+    return songs
 
 
-if __name__ == "__main__":
+# ── Glavni program ─────────────────────────────────────────────────────────────
+
+def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
 
     pdf_in = sys.argv[1]
-    docx_out = sys.argv[2] if len(sys.argv) >= 3 else str(Path(pdf_in).with_suffix(".docx"))
+    out_arg = sys.argv[2] if len(sys.argv) >= 3 else None
 
-    convert_pdf_to_docx(pdf_in, docx_out)
+    print(f"Učitavam: {pdf_in}")
+    songs = load_songs(pdf_in)
+
+    if not songs:
+        print("Nije pronađena nijedna pjesma!")
+        sys.exit(1)
+
+    print(f"Ukupno pjesama: {len(songs)}\n")
+
+    if out_arg:
+        # Eksplicitni izlaz
+        if out_arg.endswith(".pdf"):
+            convert_pdf_to_pdf(songs, out_arg)
+        else:
+            # Word
+            doc = setup_document()
+            for idx, blocks in enumerate(songs):
+                write_song(doc, blocks, first=(idx == 0))
+            doc.save(out_arg)
+            print(f"Spremi kao: {out_arg}")
+    else:
+        # Bez argumenta → generiraj i .docx i .pdf
+        base = str(Path(pdf_in).with_suffix(""))
+        docx_out = base + "_out.docx"
+        pdf_out = base + "_out.pdf"
+
+        doc = setup_document()
+        for idx, blocks in enumerate(songs):
+            write_song(doc, blocks, first=(idx == 0))
+        doc.save(docx_out)
+        print(f"Spremi kao: {docx_out}")
+
+        convert_pdf_to_pdf(songs, pdf_out)
+
+
+if __name__ == "__main__":
+    main()
