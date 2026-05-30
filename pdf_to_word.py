@@ -59,7 +59,7 @@ FONT_SIZE = 9
 
 CHORUS_INDENT = Twips(720)   # ~1.27 cm uvlaka za refren
 
-DIVIDER = "_" * 60
+DIVIDER = "_" * 35
 
 # Sekcije koje tretiramo kao CHORUS (uvučene, bold+italic)
 CHORUS_TYPES = re.compile(
