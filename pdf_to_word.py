@@ -36,6 +36,22 @@ from reportlab.platypus import (
     BalancedColumns,
 )
 from reportlab.platypus.flowables import Flowable
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+# Registracija TTF fonta s podrškom za hrvatska slova
+_FONT_DIR = "/usr/share/fonts/truetype/liberation/"
+pdfmetrics.registerFont(TTFont("LiberationSerif",          _FONT_DIR + "LiberationSerif-Regular.ttf"))
+pdfmetrics.registerFont(TTFont("LiberationSerif-Bold",     _FONT_DIR + "LiberationSerif-Bold.ttf"))
+pdfmetrics.registerFont(TTFont("LiberationSerif-Italic",   _FONT_DIR + "LiberationSerif-Italic.ttf"))
+pdfmetrics.registerFont(TTFont("LiberationSerif-BoldItalic", _FONT_DIR + "LiberationSerif-BoldItalic.ttf"))
+pdfmetrics.registerFontFamily(
+    "LiberationSerif",
+    normal="LiberationSerif",
+    bold="LiberationSerif-Bold",
+    italic="LiberationSerif-Italic",
+    boldItalic="LiberationSerif-BoldItalic",
+)
 
 
 FONT_NAME = "Times New Roman"
@@ -285,7 +301,7 @@ def setup_document():
 # Stilovi za reportlab
 _style_verse = ParagraphStyle(
     "verse",
-    fontName="Times-Roman",
+    fontName="LiberationSerif",
     fontSize=FONT_SIZE,
     leading=FONT_SIZE * 1.2,
     leftIndent=0,
@@ -295,17 +311,17 @@ _style_verse = ParagraphStyle(
 
 _style_chorus = ParagraphStyle(
     "chorus",
-    fontName="Times-BoldItalic",
+    fontName="LiberationSerif-BoldItalic",
     fontSize=FONT_SIZE,
     leading=FONT_SIZE * 1.2,
-    leftIndent=18,   # ~0.63 cm uvlaka
+    leftIndent=18,
     spaceAfter=0,
     spaceBefore=0,
 )
 
 _style_divider = ParagraphStyle(
     "divider",
-    fontName="Times-Roman",
+    fontName="LiberationSerif",
     fontSize=FONT_SIZE,
     leading=FONT_SIZE * 1.4,
     spaceAfter=2,
