@@ -112,10 +112,10 @@ def set_two_columns(doc):
     # A4 landscape
     section.page_width = Cm(29.7)
     section.page_height = Cm(21.0)
-    section.left_margin = Cm(1.5)
-    section.right_margin = Cm(1.5)
-    section.top_margin = Cm(1.5)
-    section.bottom_margin = Cm(1.5)
+    section.left_margin = Cm(0.5)
+    section.right_margin = Cm(0.5)
+    section.top_margin = Cm(0.5)
+    section.bottom_margin = Cm(0.5)
 
     # Dvije kolone s razmakom
     sectPr = section._sectPr
@@ -378,7 +378,7 @@ def songs_to_flowables(songs):
 def convert_pdf_to_pdf(songs, pdf_out_path: str):
     """Generiraj PDF u A4 landscape s dvije kolone."""
     page_w, page_h = landscape(A4)
-    margin = 1.5 * cm
+    margin = 0.5 * cm
     col_gap = 1.0 * cm
 
     doc = SimpleDocTemplate(
