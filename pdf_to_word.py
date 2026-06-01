@@ -63,7 +63,7 @@ DIVIDER = "_" * 35
 
 # Sekcije koje tretiramo kao CHORUS (uvučene, bold+italic)
 CHORUS_TYPES = re.compile(
-    r"^(Chorus|C\d*|Bridge|B\d*|BRIDGE|Pre-?Chorus|Tag|Outro)\s*(\(.*\))?$",
+    r"^(Chorus\s*\d*|C\d*|Bridge\s*\d*|B\d*|BRIDGE|Pre-?Chorus|Tag|Outro)\s*(\(.*\))?$",
     re.IGNORECASE,
 )
 # Sekcije koje tretiramo kao VERSE (normalne)
@@ -73,8 +73,8 @@ VERSE_TYPES = re.compile(
 )
 # Bilo koja sekcija labela (da je prepoznamo i preskočimo)
 ANY_SECTION = re.compile(
-    r"^(Chorus|Verse\s*\d*|Bridge|Intro|Outro|Pre-?Chorus|Tag|"
-    r"V\d+\s*(\(.*\))?|C\d*|B\d*|BRIDGE)\s*$",
+    r"^(Chorus\s*\d*|Verse\s*\d*|Bridge\s*\d*|Intro|Outro|Pre-?Chorus|Tag|"
+    r"V\d+\s*(\(.*\))?|C\d*|B\d*|BRIDGE)\s*(\(.*\))?$",
     re.IGNORECASE,
 )
 
