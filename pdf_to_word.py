@@ -54,6 +54,31 @@ pdfmetrics.registerFontFamily(
 )
 
 
+# Regex za jedan akord (hrvatska/njemačka notacija)
+# Primjeri: D, A, Fis, H, Cis, Es, Dm, Am7, G/B, Dsus4, Hm, Bb
+_CHORD_TOKEN = re.compile(
+    r"^[CDEFGAHB]"          # osnovna nota
+    r"(IS|ES|is|es|#|b)?"   # povisilica/snizilica
+    r"(m|mol|maj|min|dim|aug|sus|add)?"  # kvaliteta
+    r"\d*"                  # broj (7, 9, 11...)
+    r"(sus\d*|add\d*)?"     # sus/add sufiks
+    r"(/[CDEFGAHB](IS|ES|is|es|#|b)?)?$",  # slash akord
+    re.IGNORECASE,
+)
+
+def is_chord_line(line: str) -> bool:
+    """Vraća True ako linija sadrži samo akorde (bez normalnih riječi)."""
+    tokens = line.split()
+    if not tokens:
+        return False
+    # Linija mora imati barem jedan token i svi moraju biti akordi
+    # Dodatna provjera: ako je token dulji od 7 znakova, vjerojatno nije akord
+    return all(
+        bool(_CHORD_TOKEN.match(t)) and len(t) <= 7
+        for t in tokens
+    )
+
+
 FONT_NAME = "Times New Roman"
 FONT_SIZE = 9
 
@@ -238,6 +263,9 @@ def parse_page(page):
             if current_lines:
                 current_lines.append("")
             continue
+
+        if is_chord_line(line):
+            continue  # preskoči redak s akordima
 
         if ANY_SECTION.match(line):
             # Spremi prethodni blok
