@@ -80,9 +80,10 @@ def is_chord_line(line: str) -> bool:
 
 
 FONT_NAME = "Times New Roman"
-FONT_SIZE = 9
+DEFAULT_FONT_SIZE = 9
+DEFAULT_N_COLS = 3
 
-CHORUS_INDENT = Twips(720)   # ~1.27 cm uvlaka za refren
+CHORUS_INDENT = Twips(720)
 
 DIVIDER = "_" * 35
 
@@ -106,10 +107,9 @@ ANY_SECTION = re.compile(
 
 # ── Pomocne XML funkcije ───────────────────────────────────────────────────────
 
-def set_two_columns(doc):
-    """Postavi dvije kolone na A4 landscape."""
+def set_columns(doc, n_cols=DEFAULT_N_COLS):
+    """Postavi kolone na A4 landscape."""
     section = doc.sections[0]
-    # A4 landscape
     section.page_width = Cm(29.7)
     section.page_height = Cm(21.0)
     section.left_margin = Cm(0.5)
@@ -117,11 +117,10 @@ def set_two_columns(doc):
     section.top_margin = Cm(0.5)
     section.bottom_margin = Cm(0.5)
 
-    # Dvije kolone s razmakom
     sectPr = section._sectPr
     cols = OxmlElement("w:cols")
-    cols.set(qn("w:num"), "3")
-    cols.set(qn("w:space"), "720")  # ~1.27 cm razmak između kolona
+    cols.set(qn("w:num"), str(n_cols))
+    cols.set(qn("w:space"), "720")
     cols.set(qn("w:equalWidth"), "1")
     sectPr.append(cols)
 
@@ -134,7 +133,7 @@ def set_para_spacing(para, before=0, after=0):
     pPr.append(spacing)
 
 
-def add_run(para, text, bold=False, italic=False, size=FONT_SIZE):
+def add_run(para, text, bold=False, italic=False, size=DEFAULT_FONT_SIZE):
     run = para.add_run(text)
     run.font.name = FONT_NAME
     run.font.size = Pt(size)
@@ -144,30 +143,27 @@ def add_run(para, text, bold=False, italic=False, size=FONT_SIZE):
     return run
 
 
-def verse_para(doc, text):
-    """Normalni redak stiha."""
+def verse_para(doc, text, font_size=DEFAULT_FONT_SIZE):
     para = doc.add_paragraph()
     set_para_spacing(para, before=0, after=0)
     para.paragraph_format.left_indent = None
     para.paragraph_format.first_line_indent = None
-    add_run(para, text, bold=False, italic=False)
+    add_run(para, text, bold=False, italic=False, size=font_size)
     return para
 
 
-def chorus_para(doc, text):
-    """Uvučeni refren – bold + italic."""
+def chorus_para(doc, text, font_size=DEFAULT_FONT_SIZE):
     para = doc.add_paragraph()
     set_para_spacing(para, before=0, after=0)
     para.paragraph_format.left_indent = CHORUS_INDENT
-    add_run(para, text, bold=True, italic=True)
+    add_run(para, text, bold=True, italic=True, size=font_size)
     return para
 
 
-def divider_para(doc):
-    """Linija razdjelnika između pjesama."""
+def divider_para(doc, font_size=DEFAULT_FONT_SIZE):
     para = doc.add_paragraph()
     set_para_spacing(para, before=60, after=60)
-    add_run(para, DIVIDER, bold=False, italic=False)
+    add_run(para, DIVIDER, bold=False, italic=False, size=font_size)
     return para
 
 
@@ -294,90 +290,86 @@ def parse_page(page):
 
 # ── Pisanje pjesme u dokument ──────────────────────────────────────────────────
 
-def write_song(doc, blocks, first=False):
+def write_song(doc, blocks, first=False, font_size=DEFAULT_FONT_SIZE):
     if not first:
-        divider_para(doc)
+        divider_para(doc, font_size)
 
-    for block_idx, (btype, lines) in enumerate(blocks):
+    for btype, lines in blocks:
         for line in lines:
             if line == "":
-                pass  # preskoči prazne retke unutar bloka
+                pass
             elif btype == "chorus":
-                chorus_para(doc, line)
+                chorus_para(doc, line, font_size)
             else:
-                verse_para(doc, line)
+                verse_para(doc, line, font_size)
 
 
 # ── Postavljanje dokumenta ────────────────────────────────────────────────────
 
-def setup_document():
+def setup_document(font_size=DEFAULT_FONT_SIZE, n_cols=DEFAULT_N_COLS):
     doc = Document()
 
-    # Ukloni zadani razmak stila Normal
     style = doc.styles["Normal"]
     style.font.name = FONT_NAME
-    style.font.size = Pt(FONT_SIZE)
+    style.font.size = Pt(font_size)
     style.paragraph_format.space_before = Pt(0)
     style.paragraph_format.space_after = Pt(0)
 
-    set_two_columns(doc)
+    set_columns(doc, n_cols)
     return doc
 
 
 # ── PDF generiranje (reportlab) ────────────────────────────────────────────────
 
-# Stilovi za reportlab
-_style_verse = ParagraphStyle(
-    "verse",
-    fontName="LiberationSerif",
-    fontSize=FONT_SIZE,
-    leading=FONT_SIZE * 1.2,
-    leftIndent=0,
-    spaceAfter=0,
-    spaceBefore=0,
-)
+def make_pdf_styles(font_size=DEFAULT_FONT_SIZE):
+    verse = ParagraphStyle(
+        "verse",
+        fontName="LiberationSerif",
+        fontSize=font_size,
+        leading=font_size * 1.2,
+        leftIndent=0,
+        spaceAfter=0,
+        spaceBefore=0,
+    )
+    chorus = ParagraphStyle(
+        "chorus",
+        fontName="LiberationSerif-BoldItalic",
+        fontSize=font_size,
+        leading=font_size * 1.2,
+        leftIndent=18,
+        spaceAfter=0,
+        spaceBefore=0,
+    )
+    divider = ParagraphStyle(
+        "divider",
+        fontName="LiberationSerif",
+        fontSize=font_size,
+        leading=font_size * 1.4,
+        spaceAfter=2,
+        spaceBefore=2,
+    )
+    return verse, chorus, divider
 
-_style_chorus = ParagraphStyle(
-    "chorus",
-    fontName="LiberationSerif-BoldItalic",
-    fontSize=FONT_SIZE,
-    leading=FONT_SIZE * 1.2,
-    leftIndent=18,
-    spaceAfter=0,
-    spaceBefore=0,
-)
 
-_style_divider = ParagraphStyle(
-    "divider",
-    fontName="LiberationSerif",
-    fontSize=FONT_SIZE,
-    leading=FONT_SIZE * 1.4,
-    spaceAfter=2,
-    spaceBefore=2,
-)
-
-
-def songs_to_flowables(songs):
-    """Pretvori listu songs u reportlab flowable elemente."""
+def songs_to_flowables(songs, font_size=DEFAULT_FONT_SIZE):
+    style_verse, style_chorus, style_divider = make_pdf_styles(font_size)
     story = []
     for song_idx, blocks in enumerate(songs):
         if song_idx > 0:
-            story.append(Paragraph(DIVIDER, _style_divider))
+            story.append(Paragraph(DIVIDER, style_divider))
 
         for btype, lines in blocks:
-            style = _style_chorus if btype == "chorus" else _style_verse
+            style = style_chorus if btype == "chorus" else style_verse
             for line in lines:
                 if line and line != "":
-                    # Escapaj XML znakove
                     safe = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                     story.append(Paragraph(safe, style))
 
     return story
 
 
-def convert_pdf_to_pdf(songs, pdf_out_path: str):
-    """Generiraj PDF u A4 landscape s dvije kolone."""
-    page_w, page_h = landscape(A4)
+def convert_pdf_to_pdf(songs, pdf_out_path: str, font_size=DEFAULT_FONT_SIZE, n_cols=DEFAULT_N_COLS):
+    """Generiraj PDF u A4 landscape s kolonama."""
     margin = 0.5 * cm
     col_gap = 1.0 * cm
 
@@ -390,14 +382,11 @@ def convert_pdf_to_pdf(songs, pdf_out_path: str):
         bottomMargin=margin,
     )
 
-    col_width = (page_w - 2 * margin - col_gap) / 2
+    story_inner = songs_to_flowables(songs, font_size)
 
-    story_inner = songs_to_flowables(songs)
-
-    # BalancedColumns raspoređuje sadržaj u dvije kolone
-    two_col = BalancedColumns(
+    cols = BalancedColumns(
         story_inner,
-        nCols=3,
+        nCols=n_cols,
         needed=1 * cm,
         spaceBefore=0,
         spaceAfter=0,
@@ -405,7 +394,7 @@ def convert_pdf_to_pdf(songs, pdf_out_path: str):
         rightPadding=col_gap / 2,
     )
 
-    doc.build([two_col])
+    doc.build([cols])
     print(f"Spremi kao: {pdf_out_path}")
 
 
