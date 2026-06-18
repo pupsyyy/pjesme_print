@@ -1,1 +1,2 @@
 fonts-liberation
+fonts-freefont-ttf

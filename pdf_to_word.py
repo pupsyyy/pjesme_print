@@ -40,9 +40,40 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 # ── Registracija TTF fontova (svi podržavaju hrvatska slova) ──────────────────
+
+# Moguće lokacije fontova (Linux distribucije se razlikuju)
+_FONT_SEARCH_DIRS = [
+    "/usr/share/fonts/truetype/liberation/",
+    "/usr/share/fonts/liberation/",
+    "/usr/share/fonts/truetype/freefont/",
+    "/usr/share/fonts/freefont/",
+    "/usr/share/fonts/truetype/",
+    "/usr/share/fonts/",
+]
+
+def _find_font_file(filename):
+    """Pronađi TTF fajl u mogućim direktorijima."""
+    import os
+    for d in _FONT_SEARCH_DIRS:
+        path = os.path.join(d, filename)
+        if os.path.exists(path):
+            return path
+    # Rekurzivna pretraga kao fallback
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["find", "/usr/share/fonts", "-name", filename, "-type", "f"],
+            capture_output=True, text=True, timeout=5
+        )
+        lines = result.stdout.strip().splitlines()
+        if lines:
+            return lines[0]
+    except Exception:
+        pass
+    raise FileNotFoundError(f"Font fajl nije pronađen: {filename}")
+
 _FONTS = {
     "Liberation Serif": {
-        "dir": "/usr/share/fonts/truetype/liberation/",
         "files": {
             "normal":     "LiberationSerif-Regular.ttf",
             "bold":       "LiberationSerif-Bold.ttf",
@@ -52,7 +83,6 @@ _FONTS = {
         "word_name": "Liberation Serif",
     },
     "Liberation Sans": {
-        "dir": "/usr/share/fonts/truetype/liberation/",
         "files": {
             "normal":     "LiberationSans-Regular.ttf",
             "bold":       "LiberationSans-Bold.ttf",
@@ -62,7 +92,6 @@ _FONTS = {
         "word_name": "Liberation Sans",
     },
     "FreeSerif": {
-        "dir": "/usr/share/fonts/truetype/freefont/",
         "files": {
             "normal":     "FreeSerif.ttf",
             "bold":       "FreeSerifBold.ttf",
@@ -72,7 +101,6 @@ _FONTS = {
         "word_name": "FreeSerif",
     },
     "FreeSans": {
-        "dir": "/usr/share/fonts/truetype/freefont/",
         "files": {
             "normal":     "FreeSans.ttf",
             "bold":       "FreeSansBold.ttf",
@@ -85,13 +113,11 @@ _FONTS = {
 FONT_CHOICES = list(_FONTS.keys())
 
 def _register_font(name):
-    info = _FONTS[name]
-    d = info["dir"]
-    f = info["files"]
-    pdfmetrics.registerFont(TTFont(name,               d + f["normal"]))
-    pdfmetrics.registerFont(TTFont(name + "-Bold",     d + f["bold"]))
-    pdfmetrics.registerFont(TTFont(name + "-Italic",   d + f["italic"]))
-    pdfmetrics.registerFont(TTFont(name + "-BoldItalic", d + f["boldItalic"]))
+    f = _FONTS[name]["files"]
+    pdfmetrics.registerFont(TTFont(name,                 _find_font_file(f["normal"])))
+    pdfmetrics.registerFont(TTFont(name + "-Bold",       _find_font_file(f["bold"])))
+    pdfmetrics.registerFont(TTFont(name + "-Italic",     _find_font_file(f["italic"])))
+    pdfmetrics.registerFont(TTFont(name + "-BoldItalic", _find_font_file(f["boldItalic"])))
     pdfmetrics.registerFontFamily(
         name,
         normal=name,
