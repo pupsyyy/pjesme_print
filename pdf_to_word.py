@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 """
-Konvertira PDF s tekstovima pjesama u Word dokument.
-Svaka stranica PDF-a = jedna pjesma.
+Konvertira PDF s tekstovima pjesama u Word i/ili PDF dokument.
+
+Format izlaza:
+  - A4 landscape, dvije kolone
+  - Nema naslova ni sekcija labela
+  - Verse = normalni tekst
+  - Chorus/Bridge = uvučen, bold+italic
+  - Između pjesama = linija razdjelnika (______...)
+  - Times New Roman 10pt
 
 Korištenje:
-    python pdf_to_word.py ulaz.pdf izlaz.docx
-    python pdf_to_word.py ulaz.pdf          # sprema kao ulaz.docx
+    python pdf_to_word.py ulaz.pdf             # generira .docx i .pdf
+    python pdf_to_word.py ulaz.pdf izlaz.docx  # samo .docx
+    python pdf_to_word.py ulaz.pdf izlaz.pdf   # samo .pdf
 """
 
 import sys
@@ -14,391 +22,524 @@ from pathlib import Path
 
 import pdfplumber
 from docx import Document
-from docx.shared import Pt, Cm, RGBColor
+from docx.shared import Pt, Cm, Twips, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.units import cm, mm
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib import colors
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, HRFlowable,
+    BalancedColumns,
+)
+from reportlab.platypus.flowables import Flowable
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
-# ── Konstante za formatiranje ──────────────────────────────────────────────────
-FONT_NAME = "Calibri"
-FONT_SIZE_TITLE = 26
-FONT_SIZE_NORMAL = 11
-COLOR_BLACK = RGBColor(0, 0, 0)
+# ── Registracija TTF fontova (svi podržavaju hrvatska slova) ──────────────────
 
-# Labele sekcija koje se ispisuju boldano
-SECTION_LABELS = re.compile(
-    r"^(Chorus|Verse\s*\d*|Bridge|Intro|Outro|Pre-?Chorus|Tag|"
-    r"V\d+(?:\s*\([^)]+\))?|C\d+|B\d*|BRIDGE|Verse|verse|chorus)\s*$",
+# Moguće lokacije fontova (Linux distribucije se razlikuju)
+_FONT_SEARCH_DIRS = [
+    "/usr/share/fonts/truetype/liberation/",
+    "/usr/share/fonts/liberation/",
+    "/usr/share/fonts/truetype/freefont/",
+    "/usr/share/fonts/freefont/",
+    "/usr/share/fonts/truetype/",
+    "/usr/share/fonts/",
+]
+
+def _find_font_file(filename):
+    """Pronađi TTF fajl u mogućim direktorijima."""
+    import os
+    for d in _FONT_SEARCH_DIRS:
+        path = os.path.join(d, filename)
+        if os.path.exists(path):
+            return path
+    # Rekurzivna pretraga kao fallback
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["find", "/usr/share/fonts", "-name", filename, "-type", "f"],
+            capture_output=True, text=True, timeout=5
+        )
+        lines = result.stdout.strip().splitlines()
+        if lines:
+            return lines[0]
+    except Exception:
+        pass
+    raise FileNotFoundError(f"Font fajl nije pronađen: {filename}")
+
+_FONTS = {
+    "Liberation Serif": {
+        "files": {
+            "normal":     "LiberationSerif-Regular.ttf",
+            "bold":       "LiberationSerif-Bold.ttf",
+            "italic":     "LiberationSerif-Italic.ttf",
+            "boldItalic": "LiberationSerif-BoldItalic.ttf",
+        },
+        "word_name": "Liberation Serif",
+    },
+    "Liberation Sans": {
+        "files": {
+            "normal":     "LiberationSans-Regular.ttf",
+            "bold":       "LiberationSans-Bold.ttf",
+            "italic":     "LiberationSans-Italic.ttf",
+            "boldItalic": "LiberationSans-BoldItalic.ttf",
+        },
+        "word_name": "Liberation Sans",
+    },
+    "FreeSerif": {
+        "files": {
+            "normal":     "FreeSerif.ttf",
+            "bold":       "FreeSerifBold.ttf",
+            "italic":     "FreeSerifItalic.ttf",
+            "boldItalic": "FreeSerifBoldItalic.ttf",
+        },
+        "word_name": "FreeSerif",
+    },
+    "FreeSans": {
+        "files": {
+            "normal":     "FreeSans.ttf",
+            "bold":       "FreeSansBold.ttf",
+            "italic":     "FreeSansOblique.ttf",
+            "boldItalic": "FreeSansBoldOblique.ttf",
+        },
+        "word_name": "FreeSans",
+    },
+}
+FONT_CHOICES = list(_FONTS.keys())
+
+def _register_font(name):
+    f = _FONTS[name]["files"]
+    pdfmetrics.registerFont(TTFont(name,                 _find_font_file(f["normal"])))
+    pdfmetrics.registerFont(TTFont(name + "-Bold",       _find_font_file(f["bold"])))
+    pdfmetrics.registerFont(TTFont(name + "-Italic",     _find_font_file(f["italic"])))
+    pdfmetrics.registerFont(TTFont(name + "-BoldItalic", _find_font_file(f["boldItalic"])))
+    pdfmetrics.registerFontFamily(
+        name,
+        normal=name,
+        bold=name + "-Bold",
+        italic=name + "-Italic",
+        boldItalic=name + "-BoldItalic",
+    )
+
+_registered = set()
+def ensure_font(name):
+    if name not in _registered:
+        _register_font(name)
+        _registered.add(name)
+
+# Registriraj default font odmah
+ensure_font("Liberation Serif")
+
+
+# Regex za jedan akord (hrvatska/njemačka notacija)
+# Primjeri: D, A, Fis, H, Cis, Es, Dm, Am7, G/B, Dsus4, Hm, Bb
+_CHORD_TOKEN = re.compile(
+    r"^[CDEFGAHB]"          # osnovna nota
+    r"(IS|ES|is|es|#|b)?"   # povisilica/snizilica
+    r"(m|mol|maj|min|dim|aug|sus|add)?"  # kvaliteta
+    r"\d*"                  # broj (7, 9, 11...)
+    r"(sus\d*|add\d*)?"     # sus/add sufiks
+    r"(/[CDEFGAHB](IS|ES|is|es|#|b)?)?$",  # slash akord
+    re.IGNORECASE,
+)
+
+def is_chord_line(line: str) -> bool:
+    """Vraća True ako linija sadrži samo akorde (bez normalnih riječi)."""
+    tokens = line.split()
+    if not tokens:
+        return False
+    # Linija mora imati barem jedan token i svi moraju biti akordi
+    # Dodatna provjera: ako je token dulji od 7 znakova, vjerojatno nije akord
+    return all(
+        bool(_CHORD_TOKEN.match(t)) and len(t) <= 7
+        for t in tokens
+    )
+
+
+DEFAULT_FONT = "Liberation Serif"
+DEFAULT_FONT_SIZE = 9
+DEFAULT_N_COLS = 3
+
+CHORUS_INDENT = Twips(720)
+
+DIVIDER = "_" * 35
+
+# Sekcije koje tretiramo kao CHORUS (uvučene, bold+italic)
+CHORUS_TYPES = re.compile(
+    r"^(Chorus\s*\d*|C\d*|Bridge\s*\d*|B\d*|BRIDGE|Pre-?Chorus|Tag|Outro)\s*(\(.*\))?$",
+    re.IGNORECASE,
+)
+# Sekcije koje tretiramo kao VERSE (normalne)
+VERSE_TYPES = re.compile(
+    r"^(Verse\s*\d*|V\d+\s*(\(.*\))?|Intro|verse)\s*$",
+    re.IGNORECASE,
+)
+# Bilo koja sekcija labela (da je prepoznamo i preskočimo)
+ANY_SECTION = re.compile(
+    r"^(Chorus\s*\d*|Verse\s*\d*|Bridge\s*\d*|Intro|Outro|Pre-?Chorus|Tag|"
+    r"V\d+\s*(\(.*\))?|C\d*|B\d*|BRIDGE)\s*(\(.*\))?$",
     re.IGNORECASE,
 )
 
 
-# ── Pomoćne funkcije za Word ───────────────────────────────────────────────────
+# ── Pomocne XML funkcije ───────────────────────────────────────────────────────
 
-def set_paragraph_spacing(para, before=0, after=0, line_spacing=None):
+def set_columns(doc, n_cols=DEFAULT_N_COLS):
+    """Postavi kolone na A4 landscape."""
+    section = doc.sections[0]
+    section.page_width = Cm(29.7)
+    section.page_height = Cm(21.0)
+    section.left_margin = Cm(0.5)
+    section.right_margin = Cm(0.5)
+    section.top_margin = Cm(0.5)
+    section.bottom_margin = Cm(0.5)
+
+    sectPr = section._sectPr
+    cols = OxmlElement("w:cols")
+    cols.set(qn("w:num"), str(n_cols))
+    cols.set(qn("w:space"), "720")
+    cols.set(qn("w:equalWidth"), "1")
+    sectPr.append(cols)
+
+
+def set_para_spacing(para, before=0, after=0):
     pPr = para._p.get_or_add_pPr()
     spacing = OxmlElement("w:spacing")
     spacing.set(qn("w:before"), str(before))
     spacing.set(qn("w:after"), str(after))
-    if line_spacing is not None:
-        spacing.set(qn("w:line"), str(line_spacing))
-        spacing.set(qn("w:lineRule"), "auto")
     pPr.append(spacing)
 
 
-def add_run(para, text, bold=False, size=FONT_SIZE_NORMAL, italic=False):
+def add_run(para, text, bold=False, italic=False, size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
     run = para.add_run(text)
-    run.font.name = FONT_NAME
+    run.font.name = _FONTS[font]["word_name"]
     run.font.size = Pt(size)
     run.font.bold = bold
     run.font.italic = italic
-    run.font.color.rgb = COLOR_BLACK
+    run.font.color.rgb = RGBColor(0, 0, 0)
     return run
 
 
-def add_title_paragraph(doc, title_text, key_text):
-    """Naslov lijevo + Key desno u istom odlomku s tabulatorom."""
+def verse_para(doc, text, font_size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
     para = doc.add_paragraph()
-    para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    set_paragraph_spacing(para, before=0, after=60)
-
-    # Postavi tab stop na desni rub stranice
-    pPr = para._p.get_or_add_pPr()
-    tabs = OxmlElement("w:tabs")
-    tab = OxmlElement("w:tab")
-    tab.set(qn("w:val"), "right")
-    tab.set(qn("w:pos"), "9070")  # ~16 cm (širina teksta)
-    tabs.append(tab)
-    pPr.append(tabs)
-
-    run_title = para.add_run(title_text)
-    run_title.font.name = FONT_NAME
-    run_title.font.size = Pt(FONT_SIZE_TITLE)
-    run_title.font.bold = True
-    run_title.font.color.rgb = COLOR_BLACK
-
-    if key_text:
-        run_tab = para.add_run("\t")
-        run_tab.font.name = FONT_NAME
-        run_tab.font.size = Pt(FONT_SIZE_NORMAL)
-
-        run_key = para.add_run(key_text)
-        run_key.font.name = FONT_NAME
-        run_key.font.size = Pt(FONT_SIZE_NORMAL)
-        run_key.font.bold = False
-        run_key.font.color.rgb = COLOR_BLACK
-
+    set_para_spacing(para, before=0, after=0)
+    para.paragraph_format.left_indent = None
+    para.paragraph_format.first_line_indent = None
+    add_run(para, text, bold=False, italic=False, size=font_size, font=font)
     return para
 
 
-def add_section_label(doc, label):
+def chorus_para(doc, text, font_size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
     para = doc.add_paragraph()
-    set_paragraph_spacing(para, before=120, after=0)
-    add_run(para, label, bold=True)
+    set_para_spacing(para, before=0, after=0)
+    para.paragraph_format.left_indent = CHORUS_INDENT
+    add_run(para, text, bold=True, italic=True, size=font_size, font=font)
     return para
 
 
-def add_lyric_line(doc, text):
+def divider_para(doc, font_size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
     para = doc.add_paragraph()
-    set_paragraph_spacing(para, before=0, after=0)
-    add_run(para, text)
+    set_para_spacing(para, before=60, after=60)
+    add_run(para, DIVIDER, bold=False, italic=False, size=font_size, font=font)
     return para
 
 
-def add_meta_label(doc, label, values):
-    """'Pjesmarica' bold, ispod njega vrijednosti normalno."""
-    para_label = doc.add_paragraph()
-    set_paragraph_spacing(para_label, before=0, after=0)
-    add_run(para_label, label, bold=True)
-
-    for val in values:
-        para_val = doc.add_paragraph()
-        set_paragraph_spacing(para_val, before=0, after=0)
-        add_run(para_val, val)
-
-    return para_label
-
-
-def add_plain_line(doc, text):
-    """Redak koji nije ni label ni lyric – samo tekst (npr. napomene)."""
+def empty_para(doc):
     para = doc.add_paragraph()
-    set_paragraph_spacing(para, before=0, after=0)
-    add_run(para, text)
-    return para
-
-
-def add_empty_line(doc):
-    para = doc.add_paragraph()
-    set_paragraph_spacing(para, before=0, after=0)
+    set_para_spacing(para, before=0, after=0)
     add_run(para, "")
     return para
 
 
-# ── Parsiranje jedne stranice PDF-a ───────────────────────────────────────────
+# ── Parsiranje PDF stranice ────────────────────────────────────────────────────
 
 def parse_page(page):
     """
-    Vraća dict:
-        title      : str
-        key        : str  (npr. "Key: A (Ab)\nCapo 1")
-        subtitle   : str | None  (redak ispod naslova, lijevo)
-        pjesmarica : list[str]
-        sections   : list of (label, lines)
-            label = str ili None (za blokove bez labele)
-            lines = list[str]
-        notes      : list[str]   (redovi PRIJE prve sekcije, a iza Pjesmarica)
+    Vraća listu blokova:
+      [("verse", ["linija", ...]), ("chorus", ["linija", ...]), ...]
+    Preskačemo naslov, key, pjesmarica meta-info.
     """
-    # Dohvati sve riječi s pozicijama
     words = page.extract_words(x_tolerance=3, y_tolerance=3)
     if not words:
         return None
 
     page_width = page.width
-    right_threshold = page_width * 0.55  # desna polovina = Key zona
+    right_threshold = page_width * 0.55
 
-    # Grupiraj u retke po y koordinati
+    # Grupiraj u retke
     lines_by_y = {}
     for w in words:
-        y = round(w["top"] / 3) * 3  # zaokruži na 3pt
+        y = round(w["top"] / 3) * 3
         lines_by_y.setdefault(y, []).append(w)
 
     sorted_ys = sorted(lines_by_y.keys())
-    raw_lines = []  # lista (y, left_x, text_left, text_right)
+    raw_lines = []
     for y in sorted_ys:
         row_words = sorted(lines_by_y[y], key=lambda w: w["x0"])
         left_words = [w for w in row_words if w["x0"] < right_threshold]
-        right_words = [w for w in row_words if w["x0"] >= right_threshold]
         text_left = " ".join(w["text"] for w in left_words).strip()
-        text_right = " ".join(w["text"] for w in right_words).strip()
-        left_x = row_words[0]["x0"] if row_words else 0
-        raw_lines.append((y, left_x, text_left, text_right))
+        raw_lines.append(text_left)
 
     if not raw_lines:
         return None
 
-    # ── 1. Naslov: prva linija (najveći font, bold) ──────────────────────────
-    # Detektiramo naslov kao prvu nepraznu lijevu liniju
-    title = ""
-    subtitle = None
-    key_parts = []
+    # Preskoci naslov (prvi neprazni red) i opcionalni podnaslov
+    idx = 0
+    while idx < len(raw_lines) and not raw_lines[idx]:
+        idx += 1
+    if idx >= len(raw_lines):
+        return None
+    idx += 1  # preskoči naslov
 
-    title_idx = 0
-    for i, (y, lx, tl, tr) in enumerate(raw_lines):
-        if tl:
-            title = tl
-            title_idx = i
-            # Key može biti na istom retku (desno)
-            if tr:
-                key_parts.append(tr)
-            break
+    # Preskoči podnaslov ako ne počinje s "Pjesmarica" i nije sekcija
+    if idx < len(raw_lines):
+        line = raw_lines[idx]
+        if line and not line.startswith("Pjesmarica") and not ANY_SECTION.match(line):
+            idx += 1
 
-    # Redak odmah ispod naslova – može biti podnaslov (italic/manji font)
-    # ili može biti "Capo N" ili "No" itd.
-    # Heuristika: ako sljedeći red ima tekst i nije "Pjesmarica", tretiramo
-    # ga kao podnaslov ako ne počinje s "Key:" i nije broj
-    next_idx = title_idx + 1
-    if next_idx < len(raw_lines):
-        y2, lx2, tl2, tr2 = raw_lines[next_idx]
-        if tr2 and not tl2:
-            # samo desno -> nastavak Key (Capo)
-            key_parts.append(tr2)
-            next_idx += 1
-        elif tl2 and not tl2.startswith("Pjesmarica") and not re.match(r"^\d+$", tl2):
-            # kratki redak bez labels = podnaslov
-            if len(tl2.split()) <= 6 and not SECTION_LABELS.match(tl2):
-                # provjeri je li sljedeći redak Pjesmarica ili prazan
-                peek_idx = next_idx + 1
-                if peek_idx < len(raw_lines):
-                    _, _, tl3, _ = raw_lines[peek_idx]
-                    if tl3.startswith("Pjesmarica") or not tl3:
-                        subtitle = tl2
-                        next_idx += 1
-                        # provjeri Capo na desnoj strani tog retka
-                        if tr2:
-                            key_parts.append(tr2)
-
-    key_text = "\n".join(key_parts) if key_parts else ""
-
-    # ── 2. Pjesmarica blok ──────────────────────────────────────────────────
-    pjesmarica_values = []
-    pi = next_idx
-    if pi < len(raw_lines) and raw_lines[pi][2].startswith("Pjesmarica"):
-        pi += 1
-        while pi < len(raw_lines):
-            _, _, tl, _ = raw_lines[pi]
-            if not tl or SECTION_LABELS.match(tl) or tl.startswith("Verse") \
-               or tl.startswith("Chorus") or tl.startswith("Bridge"):
+    # Preskoči Pjesmarica blok
+    if idx < len(raw_lines) and raw_lines[idx].startswith("Pjesmarica"):
+        idx += 1
+        while idx < len(raw_lines):
+            line = raw_lines[idx]
+            if not line or ANY_SECTION.match(line):
                 break
-            if re.match(r"^[\d\s\-/]+$", tl) or re.match(r"^P\d", tl):
-                pjesmarica_values.append(tl)
-                pi += 1
+            if re.match(r"^[\d\s\-/]+$", line) or re.match(r"^P\d", line):
+                idx += 1
             else:
                 break
 
-    # ── 3. Ostatak = napomene + sekcije ─────────────────────────────────────
-    notes = []
-    sections = []  # list of [label, lines_list]
-    current_label = None
+    # Preskoči napomene (tekst prije prve sekcije)
+    # – ako se pojave redovi koji izgledaju kao upute a ne sekcija labels
+    first_section_found = False
+    notes_end = idx
+    for j in range(idx, len(raw_lines)):
+        if ANY_SECTION.match(raw_lines[j] or ""):
+            first_section_found = True
+            notes_end = j
+            break
+    if not first_section_found:
+        notes_end = idx  # nema sekcije – počinjemo odmah
+
+    idx = notes_end
+
+    # Parsiraj sekcije
+    blocks = []  # list of (type, lines)
+    current_type = "verse"
     current_lines = []
-    in_notes = True  # dok ne dođemo do prve sekcije
 
-    i = pi
-    while i < len(raw_lines):
-        y, lx, tl, tr = raw_lines[i]
-        i += 1
+    while idx < len(raw_lines):
+        line = raw_lines[idx]
+        idx += 1
 
-        if not tl:
-            # prazan red
-            if current_label is not None or current_lines:
+        if not line:
+            if current_lines:
                 current_lines.append("")
-            elif in_notes and notes:
-                notes.append("")
             continue
 
-        if SECTION_LABELS.match(tl):
-            # spremi prethodni blok
-            if in_notes and current_lines:
-                notes.extend(current_lines)
-                current_lines = []
-            elif current_label is not None or current_lines:
-                # trim trailing empty
+        if is_chord_line(line):
+            continue  # preskoči redak s akordima
+
+        if ANY_SECTION.match(line):
+            # Spremi prethodni blok
+            if current_lines:
                 while current_lines and current_lines[-1] == "":
                     current_lines.pop()
-                sections.append([current_label, current_lines])
+                if current_lines:
+                    blocks.append((current_type, current_lines))
                 current_lines = []
-
-            current_label = tl
-            in_notes = False
-        else:
-            if in_notes:
-                notes.append(tl)
+            # Odredi novi tip
+            if CHORUS_TYPES.match(line):
+                current_type = "chorus"
             else:
-                current_lines.append(tl)
+                current_type = "verse"
+        else:
+            current_lines.append(line)
 
-    # spremi zadnji blok
-    if current_label is not None or current_lines:
+    if current_lines:
         while current_lines and current_lines[-1] == "":
             current_lines.pop()
-        sections.append([current_label, current_lines])
+        if current_lines:
+            blocks.append((current_type, current_lines))
 
-    # trim notes trailing empty
-    while notes and notes[-1] == "":
-        notes.pop()
-
-    return {
-        "title": title,
-        "key": key_text,
-        "subtitle": subtitle,
-        "pjesmarica": pjesmarica_values,
-        "notes": notes,
-        "sections": sections,
-    }
+    return blocks
 
 
-# ── Pisanje jedne pjesme u Word dokument ──────────────────────────────────────
+# ── Pisanje pjesme u dokument ──────────────────────────────────────────────────
 
-def write_song(doc, song, add_page_break=False):
-    if add_page_break:
-        doc.add_page_break()
+def write_song(doc, blocks, first=False, font_size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
+    if not first:
+        divider_para(doc, font_size, font)
 
-    # Naslov + Key
-    add_title_paragraph(doc, song["title"], song["key"])
-
-    # Podnaslov (npr. "Božja Pobjeda", "Papa Band")
-    if song["subtitle"]:
-        para = doc.add_paragraph()
-        set_paragraph_spacing(para, before=0, after=0)
-        add_run(para, song["subtitle"])
-
-    # Pjesmarica
-    if song["pjesmarica"]:
-        add_empty_line(doc)
-        add_meta_label(doc, "Pjesmarica", song["pjesmarica"])
-
-    # Napomene (tekst prije sekcija)
-    if song["notes"]:
-        add_empty_line(doc)
-        for note in song["notes"]:
-            if note == "":
-                add_empty_line(doc)
-            else:
-                add_plain_line(doc, note)
-
-    # Sekcije
-    for label, lines in song["sections"]:
-        add_empty_line(doc)
-        if label:
-            add_section_label(doc, label)
-        # Grupiraj linije u blokove odvojene praznim recima
+    for btype, lines in blocks:
         for line in lines:
             if line == "":
-                add_empty_line(doc)
+                pass
+            elif btype == "chorus":
+                chorus_para(doc, line, font_size, font)
             else:
-                add_lyric_line(doc, line)
+                verse_para(doc, line, font_size, font)
 
 
-# ── Postavljanje margina dokumenta ────────────────────────────────────────────
+# ── Postavljanje dokumenta ────────────────────────────────────────────────────
 
-def setup_document():
+def setup_document(font_size=DEFAULT_FONT_SIZE, n_cols=DEFAULT_N_COLS, font=DEFAULT_FONT):
     doc = Document()
-    section = doc.sections[0]
-    section.top_margin = Cm(2.5)
-    section.bottom_margin = Cm(2.5)
-    section.left_margin = Cm(2.5)
-    section.right_margin = Cm(2.5)
 
-    # Ukloni zadani razmak između odlomaka
     style = doc.styles["Normal"]
-    style.font.name = FONT_NAME
-    style.font.size = Pt(FONT_SIZE_NORMAL)
-    pf = style.paragraph_format
-    pf.space_before = Pt(0)
-    pf.space_after = Pt(0)
+    style.font.name = _FONTS[font]["word_name"]
+    style.font.size = Pt(font_size)
+    style.paragraph_format.space_before = Pt(0)
+    style.paragraph_format.space_after = Pt(0)
 
+    set_columns(doc, n_cols)
     return doc
 
 
-# ── Glavna funkcija ────────────────────────────────────────────────────────────
+# ── PDF generiranje (reportlab) ────────────────────────────────────────────────
 
-def convert_pdf_to_docx(pdf_path: str, docx_path: str):
-    print(f"Učitavam: {pdf_path}")
+def make_pdf_styles(font_size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
+    ensure_font(font)
+    verse = ParagraphStyle(
+        "verse",
+        fontName=font,
+        fontSize=font_size,
+        leading=font_size * 1.2,
+        leftIndent=0,
+        spaceAfter=0,
+        spaceBefore=0,
+    )
+    chorus = ParagraphStyle(
+        "chorus",
+        fontName=font + "-BoldItalic",
+        fontSize=font_size,
+        leading=font_size * 1.2,
+        leftIndent=18,
+        spaceAfter=0,
+        spaceBefore=0,
+    )
+    divider = ParagraphStyle(
+        "divider",
+        fontName=font,
+        fontSize=font_size,
+        leading=font_size * 1.4,
+        spaceAfter=2,
+        spaceBefore=2,
+    )
+    return verse, chorus, divider
+
+
+def songs_to_flowables(songs, font_size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
+    style_verse, style_chorus, style_divider = make_pdf_styles(font_size, font)
+    story = []
+    for song_idx, blocks in enumerate(songs):
+        if song_idx > 0:
+            story.append(Paragraph(DIVIDER, style_divider))
+
+        for btype, lines in blocks:
+            style = style_chorus if btype == "chorus" else style_verse
+            for line in lines:
+                if line and line != "":
+                    safe = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    story.append(Paragraph(safe, style))
+
+    return story
+
+
+def convert_pdf_to_pdf(songs, pdf_out_path: str, font_size=DEFAULT_FONT_SIZE, n_cols=DEFAULT_N_COLS, font=DEFAULT_FONT):
+    """Generiraj PDF u A4 landscape s kolonama."""
+    margin = 0.5 * cm
+    col_gap = 1.0 * cm
+
+    doc = SimpleDocTemplate(
+        pdf_out_path,
+        pagesize=landscape(A4),
+        leftMargin=margin,
+        rightMargin=margin,
+        topMargin=margin,
+        bottomMargin=margin,
+    )
+
+    story_inner = songs_to_flowables(songs, font_size, font)
+
+    cols = BalancedColumns(
+        story_inner,
+        nCols=n_cols,
+        needed=1 * cm,
+        spaceBefore=0,
+        spaceAfter=0,
+        leftPadding=0,
+        rightPadding=col_gap / 2,
+    )
+
+    doc.build([cols])
+    print(f"Spremi kao: {pdf_out_path}")
+
+
+# ── Parsiranje PDF-a ───────────────────────────────────────────────────────────
+
+def load_songs(pdf_path: str):
     songs = []
-
     with pdfplumber.open(pdf_path) as pdf:
         for page_num, page in enumerate(pdf.pages, 1):
-            song = parse_page(page)
-            if song and song["title"]:
-                songs.append(song)
-                print(f"  Stranica {page_num}: {song['title']}")
+            blocks = parse_page(page)
+            if blocks:
+                songs.append(blocks)
+                print(f"  Stranica {page_num}: OK ({len(blocks)} blok(ova))")
             else:
-                print(f"  Stranica {page_num}: (preskočena – nema sadržaja)")
-
-    if not songs:
-        print("Nije pronađena nijedna pjesma!")
-        return
-
-    doc = setup_document()
-
-    for idx, song in enumerate(songs):
-        write_song(doc, song, add_page_break=(idx > 0))
-
-    doc.save(docx_path)
-    print(f"\nSpremi kao: {docx_path}")
-    print(f"Ukupno pjesama: {len(songs)}")
+                print(f"  Stranica {page_num}: (preskočena)")
+    return songs
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── Glavni program ─────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
+def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
 
     pdf_in = sys.argv[1]
-    if len(sys.argv) >= 3:
-        docx_out = sys.argv[2]
-    else:
-        docx_out = str(Path(pdf_in).with_suffix(".docx"))
+    out_arg = sys.argv[2] if len(sys.argv) >= 3 else None
 
-    convert_pdf_to_docx(pdf_in, docx_out)
+    print(f"Učitavam: {pdf_in}")
+    songs = load_songs(pdf_in)
+
+    if not songs:
+        print("Nije pronađena nijedna pjesma!")
+        sys.exit(1)
+
+    print(f"Ukupno pjesama: {len(songs)}\n")
+
+    if out_arg:
+        # Eksplicitni izlaz
+        if out_arg.endswith(".pdf"):
+            convert_pdf_to_pdf(songs, out_arg)
+        else:
+            # Word
+            doc = setup_document()
+            for idx, blocks in enumerate(songs):
+                write_song(doc, blocks, first=(idx == 0))
+            doc.save(out_arg)
+            print(f"Spremi kao: {out_arg}")
+    else:
+        # Bez argumenta → generiraj i .docx i .pdf
+        base = str(Path(pdf_in).with_suffix(""))
+        docx_out = base + "_out.docx"
+        pdf_out = base + "_out.pdf"
+
+        doc = setup_document()
+        for idx, blocks in enumerate(songs):
+            write_song(doc, blocks, first=(idx == 0))
+        doc.save(docx_out)
+        print(f"Spremi kao: {docx_out}")
+
+        convert_pdf_to_pdf(songs, pdf_out)
+
+
+if __name__ == "__main__":
+    main()
