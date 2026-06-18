@@ -39,19 +39,75 @@ from reportlab.platypus.flowables import Flowable
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# Registracija TTF fonta s podrškom za hrvatska slova
-_FONT_DIR = "/usr/share/fonts/truetype/liberation/"
-pdfmetrics.registerFont(TTFont("LiberationSerif",          _FONT_DIR + "LiberationSerif-Regular.ttf"))
-pdfmetrics.registerFont(TTFont("LiberationSerif-Bold",     _FONT_DIR + "LiberationSerif-Bold.ttf"))
-pdfmetrics.registerFont(TTFont("LiberationSerif-Italic",   _FONT_DIR + "LiberationSerif-Italic.ttf"))
-pdfmetrics.registerFont(TTFont("LiberationSerif-BoldItalic", _FONT_DIR + "LiberationSerif-BoldItalic.ttf"))
-pdfmetrics.registerFontFamily(
-    "LiberationSerif",
-    normal="LiberationSerif",
-    bold="LiberationSerif-Bold",
-    italic="LiberationSerif-Italic",
-    boldItalic="LiberationSerif-BoldItalic",
-)
+# ── Registracija TTF fontova (svi podržavaju hrvatska slova) ──────────────────
+_FONTS = {
+    "Liberation Serif": {
+        "dir": "/usr/share/fonts/truetype/liberation/",
+        "files": {
+            "normal":     "LiberationSerif-Regular.ttf",
+            "bold":       "LiberationSerif-Bold.ttf",
+            "italic":     "LiberationSerif-Italic.ttf",
+            "boldItalic": "LiberationSerif-BoldItalic.ttf",
+        },
+        "word_name": "Liberation Serif",
+    },
+    "Liberation Sans": {
+        "dir": "/usr/share/fonts/truetype/liberation/",
+        "files": {
+            "normal":     "LiberationSans-Regular.ttf",
+            "bold":       "LiberationSans-Bold.ttf",
+            "italic":     "LiberationSans-Italic.ttf",
+            "boldItalic": "LiberationSans-BoldItalic.ttf",
+        },
+        "word_name": "Liberation Sans",
+    },
+    "FreeSerif": {
+        "dir": "/usr/share/fonts/truetype/freefont/",
+        "files": {
+            "normal":     "FreeSerif.ttf",
+            "bold":       "FreeSerifBold.ttf",
+            "italic":     "FreeSerifItalic.ttf",
+            "boldItalic": "FreeSerifBoldItalic.ttf",
+        },
+        "word_name": "FreeSerif",
+    },
+    "FreeSans": {
+        "dir": "/usr/share/fonts/truetype/freefont/",
+        "files": {
+            "normal":     "FreeSans.ttf",
+            "bold":       "FreeSansBold.ttf",
+            "italic":     "FreeSansOblique.ttf",
+            "boldItalic": "FreeSansBoldOblique.ttf",
+        },
+        "word_name": "FreeSans",
+    },
+}
+FONT_CHOICES = list(_FONTS.keys())
+
+def _register_font(name):
+    info = _FONTS[name]
+    d = info["dir"]
+    f = info["files"]
+    pdfmetrics.registerFont(TTFont(name,               d + f["normal"]))
+    pdfmetrics.registerFont(TTFont(name + "-Bold",     d + f["bold"]))
+    pdfmetrics.registerFont(TTFont(name + "-Italic",   d + f["italic"]))
+    pdfmetrics.registerFont(TTFont(name + "-BoldItalic", d + f["boldItalic"]))
+    pdfmetrics.registerFontFamily(
+        name,
+        normal=name,
+        bold=name + "-Bold",
+        italic=name + "-Italic",
+        boldItalic=name + "-BoldItalic",
+    )
+
+_registered = set()
+def ensure_font(name):
+    if name not in _registered:
+        _register_font(name)
+        _registered.add(name)
+
+# Registriraj default font odmah
+ensure_font("Liberation Serif")
 
 
 # Regex za jedan akord (hrvatska/njemačka notacija)
@@ -79,7 +135,7 @@ def is_chord_line(line: str) -> bool:
     )
 
 
-FONT_NAME = "Times New Roman"
+DEFAULT_FONT = "Liberation Serif"
 DEFAULT_FONT_SIZE = 9
 DEFAULT_N_COLS = 3
 
@@ -133,9 +189,9 @@ def set_para_spacing(para, before=0, after=0):
     pPr.append(spacing)
 
 
-def add_run(para, text, bold=False, italic=False, size=DEFAULT_FONT_SIZE):
+def add_run(para, text, bold=False, italic=False, size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
     run = para.add_run(text)
-    run.font.name = FONT_NAME
+    run.font.name = _FONTS[font]["word_name"]
     run.font.size = Pt(size)
     run.font.bold = bold
     run.font.italic = italic
@@ -143,27 +199,27 @@ def add_run(para, text, bold=False, italic=False, size=DEFAULT_FONT_SIZE):
     return run
 
 
-def verse_para(doc, text, font_size=DEFAULT_FONT_SIZE):
+def verse_para(doc, text, font_size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
     para = doc.add_paragraph()
     set_para_spacing(para, before=0, after=0)
     para.paragraph_format.left_indent = None
     para.paragraph_format.first_line_indent = None
-    add_run(para, text, bold=False, italic=False, size=font_size)
+    add_run(para, text, bold=False, italic=False, size=font_size, font=font)
     return para
 
 
-def chorus_para(doc, text, font_size=DEFAULT_FONT_SIZE):
+def chorus_para(doc, text, font_size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
     para = doc.add_paragraph()
     set_para_spacing(para, before=0, after=0)
     para.paragraph_format.left_indent = CHORUS_INDENT
-    add_run(para, text, bold=True, italic=True, size=font_size)
+    add_run(para, text, bold=True, italic=True, size=font_size, font=font)
     return para
 
 
-def divider_para(doc, font_size=DEFAULT_FONT_SIZE):
+def divider_para(doc, font_size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
     para = doc.add_paragraph()
     set_para_spacing(para, before=60, after=60)
-    add_run(para, DIVIDER, bold=False, italic=False, size=font_size)
+    add_run(para, DIVIDER, bold=False, italic=False, size=font_size, font=font)
     return para
 
 
@@ -290,27 +346,27 @@ def parse_page(page):
 
 # ── Pisanje pjesme u dokument ──────────────────────────────────────────────────
 
-def write_song(doc, blocks, first=False, font_size=DEFAULT_FONT_SIZE):
+def write_song(doc, blocks, first=False, font_size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
     if not first:
-        divider_para(doc, font_size)
+        divider_para(doc, font_size, font)
 
     for btype, lines in blocks:
         for line in lines:
             if line == "":
                 pass
             elif btype == "chorus":
-                chorus_para(doc, line, font_size)
+                chorus_para(doc, line, font_size, font)
             else:
-                verse_para(doc, line, font_size)
+                verse_para(doc, line, font_size, font)
 
 
 # ── Postavljanje dokumenta ────────────────────────────────────────────────────
 
-def setup_document(font_size=DEFAULT_FONT_SIZE, n_cols=DEFAULT_N_COLS):
+def setup_document(font_size=DEFAULT_FONT_SIZE, n_cols=DEFAULT_N_COLS, font=DEFAULT_FONT):
     doc = Document()
 
     style = doc.styles["Normal"]
-    style.font.name = FONT_NAME
+    style.font.name = _FONTS[font]["word_name"]
     style.font.size = Pt(font_size)
     style.paragraph_format.space_before = Pt(0)
     style.paragraph_format.space_after = Pt(0)
@@ -321,10 +377,11 @@ def setup_document(font_size=DEFAULT_FONT_SIZE, n_cols=DEFAULT_N_COLS):
 
 # ── PDF generiranje (reportlab) ────────────────────────────────────────────────
 
-def make_pdf_styles(font_size=DEFAULT_FONT_SIZE):
+def make_pdf_styles(font_size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
+    ensure_font(font)
     verse = ParagraphStyle(
         "verse",
-        fontName="LiberationSerif",
+        fontName=font,
         fontSize=font_size,
         leading=font_size * 1.2,
         leftIndent=0,
@@ -333,7 +390,7 @@ def make_pdf_styles(font_size=DEFAULT_FONT_SIZE):
     )
     chorus = ParagraphStyle(
         "chorus",
-        fontName="LiberationSerif-BoldItalic",
+        fontName=font + "-BoldItalic",
         fontSize=font_size,
         leading=font_size * 1.2,
         leftIndent=18,
@@ -342,7 +399,7 @@ def make_pdf_styles(font_size=DEFAULT_FONT_SIZE):
     )
     divider = ParagraphStyle(
         "divider",
-        fontName="LiberationSerif",
+        fontName=font,
         fontSize=font_size,
         leading=font_size * 1.4,
         spaceAfter=2,
@@ -351,8 +408,8 @@ def make_pdf_styles(font_size=DEFAULT_FONT_SIZE):
     return verse, chorus, divider
 
 
-def songs_to_flowables(songs, font_size=DEFAULT_FONT_SIZE):
-    style_verse, style_chorus, style_divider = make_pdf_styles(font_size)
+def songs_to_flowables(songs, font_size=DEFAULT_FONT_SIZE, font=DEFAULT_FONT):
+    style_verse, style_chorus, style_divider = make_pdf_styles(font_size, font)
     story = []
     for song_idx, blocks in enumerate(songs):
         if song_idx > 0:
@@ -368,7 +425,7 @@ def songs_to_flowables(songs, font_size=DEFAULT_FONT_SIZE):
     return story
 
 
-def convert_pdf_to_pdf(songs, pdf_out_path: str, font_size=DEFAULT_FONT_SIZE, n_cols=DEFAULT_N_COLS):
+def convert_pdf_to_pdf(songs, pdf_out_path: str, font_size=DEFAULT_FONT_SIZE, n_cols=DEFAULT_N_COLS, font=DEFAULT_FONT):
     """Generiraj PDF u A4 landscape s kolonama."""
     margin = 0.5 * cm
     col_gap = 1.0 * cm
@@ -382,7 +439,7 @@ def convert_pdf_to_pdf(songs, pdf_out_path: str, font_size=DEFAULT_FONT_SIZE, n_
         bottomMargin=margin,
     )
 
-    story_inner = songs_to_flowables(songs, font_size)
+    story_inner = songs_to_flowables(songs, font_size, font)
 
     cols = BalancedColumns(
         story_inner,

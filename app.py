@@ -1,7 +1,10 @@
 import streamlit as st
 import tempfile
 from pathlib import Path
-from pdf_to_word import load_songs, setup_document, write_song, convert_pdf_to_pdf, DEFAULT_FONT_SIZE, DEFAULT_N_COLS
+from pdf_to_word import (
+    load_songs, setup_document, write_song, convert_pdf_to_pdf,
+    DEFAULT_FONT_SIZE, DEFAULT_N_COLS, DEFAULT_FONT, FONT_CHOICES,
+)
 
 st.set_page_config(page_title="Pjesme → Word/PDF", page_icon="🎵", layout="centered")
 
@@ -17,10 +20,8 @@ col_a, col_b = st.columns(2)
 with col_a:
     font_size = st.slider(
         "Veličina teksta (pt)",
-        min_value=7,
-        max_value=14,
-        value=DEFAULT_FONT_SIZE,
-        step=1,
+        min_value=7, max_value=14,
+        value=DEFAULT_FONT_SIZE, step=1,
     )
 with col_b:
     n_cols = st.radio(
@@ -29,6 +30,13 @@ with col_b:
         index=DEFAULT_N_COLS - 2,
         horizontal=True,
     )
+
+font = st.selectbox(
+    "Font",
+    options=FONT_CHOICES,
+    index=FONT_CHOICES.index(DEFAULT_FONT),
+    help="Liberation Serif ≈ Times New Roman | Liberation Sans ≈ Arial",
+)
 
 # ── Konverzija ────────────────────────────────────────────────────────────────
 if uploaded:
@@ -45,16 +53,14 @@ if uploaded:
             st.success(f"Pronađeno {len(songs)} pjesama.")
 
             with st.spinner("Generiram dokumente..."):
-                # Generiraj DOCX
                 docx_out = Path(tmpdir) / "izlaz.docx"
-                doc = setup_document(font_size=font_size, n_cols=n_cols)
+                doc = setup_document(font_size=font_size, n_cols=n_cols, font=font)
                 for idx, blocks in enumerate(songs):
-                    write_song(doc, blocks, first=(idx == 0), font_size=font_size)
+                    write_song(doc, blocks, first=(idx == 0), font_size=font_size, font=font)
                 doc.save(str(docx_out))
 
-                # Generiraj PDF
                 pdf_out = Path(tmpdir) / "izlaz.pdf"
-                convert_pdf_to_pdf(songs, str(pdf_out), font_size=font_size, n_cols=n_cols)
+                convert_pdf_to_pdf(songs, str(pdf_out), font_size=font_size, n_cols=n_cols, font=font)
 
             col1, col2 = st.columns(2)
             with col1:
@@ -74,4 +80,4 @@ if uploaded:
                     use_container_width=True,
                 )
 
-            st.caption(f"Postavke: {font_size}pt · {n_cols} stupca")
+            st.caption(f"Postavke: {font} · {font_size}pt · {n_cols} stupca")
