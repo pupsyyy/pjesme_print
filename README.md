@@ -1,12 +1,21 @@
 # pjesme_print
 
-Konverzija PDF pjesmarice u Word dokument (`.docx`). Svaka stranica PDF-a =
-jedna pjesma; skripta prepoznaje naslov, tonalitet (Key/Capo), blok
-"Pjesmarica", napomene i sekcije (Verse, Chorus, Bridge…).
+Web aplikacija za uređivanje PDF pjesmarice: učitaš PDF (svaka stranica =
+jedna pjesma), urediš pjesme u pregledniku i preuzmeš **novi PDF ili Word**.
 
-## Web aplikacija
+## Mogućnosti
 
-Upload PDF-a kroz preglednik, download gotovog Word dokumenta.
+- **Učitavanje** PDF pjesmarice (klik ili drag & drop); prepoznaju se naslov,
+  tonalitet (Key/Capo), podnaslov, blok "Pjesmarica", napomene i sekcije
+  (Verse, Chorus, Bridge…)
+- **Uređivanje**: tekst svake pjesme, naslov, tonalitet; redoslijed (↑↓),
+  uključivanje/isključivanje pjesama kvačicom, dodavanje novih i brisanje
+- **Opcije formatiranja**: font, veličina naslova i teksta, margine,
+  pjesma na novoj stranici da/ne
+- **Izvoz**: PDF (s ispravnim hrvatskim dijakriticima) ili Word (.docx)
+- **Tamna tema** (zadano) sa prekidačem na svijetlu
+
+## Pokretanje
 
 ```bash
 pip install -r requirements.txt
@@ -14,9 +23,9 @@ python app.py            # http://localhost:8000
 ```
 
 Produkcija: vidi **[DEPLOY.md](DEPLOY.md)** — upute za Hostinger VPS
-(Docker ili systemd + nginx, s HTTPS-om).
+(Docker, Caddy na putanji domene).
 
-## Komandna linija
+## Komandna linija (samo konverzija u Word)
 
 ```bash
 python pdf_to_word.py ulaz.pdf izlaz.docx
