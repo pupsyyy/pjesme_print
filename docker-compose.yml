@@ -4,9 +4,10 @@ services:
     container_name: pjesme_print
     restart: unless-stopped
     ports:
-      # Aplikacija dostupna izravno na http://IP-servera/
-      - "80:8000"
-      # Ako ispred stavljaš nginx + HTTPS (vidi DEPLOY.md), zamijeni gornju liniju s:
-      # - "127.0.0.1:8000:8000"
+      # Aplikacija dostupna na http://IP-servera:8010/
+      # (port 80 ostaje slobodan za portal / druge aplikacije na serveru)
+      - "8010:8000"
+      # Kad ispred staneš nginx portal ili HTTPS (vidi DEPLOY.md), zamijeni s:
+      # - "127.0.0.1:8010:8000"
     environment:
       - MAX_UPLOAD_MB=50
