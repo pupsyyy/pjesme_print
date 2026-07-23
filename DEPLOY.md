@@ -49,13 +49,20 @@ cd pjesme_print
 docker compose up -d --build
 ```
 
-To je to — aplikacija je dostupna na **http://IP-ADRESA:8010/**.
+Aplikacija sada radi na serveru, vezana na `127.0.0.1:8010`. Provjera:
 
-> Aplikacija namjerno koristi port **8010**, a ne 80 — tako port 80 ostaje
-> slobodan za zajednički portal ili druge aplikacije na istom serveru
-> (vidi [Više aplikacija na istom serveru](#više-aplikacija-na-istom-serveru)).
-> Ako je 8010 zauzet, promijeni lijevi broj u `ports` u `docker-compose.yml`
-> (npr. `"8020:8000"`).
+```bash
+curl -I http://127.0.0.1:8010/health    # mora vratiti HTTP/1.1 200 OK
+```
+
+Izvana je dostupna kroz reverse proxy na putanji domene, npr.
+**https://josip.cloud/print_pjesme** — vidi
+[Više aplikacija na istom serveru](#više-aplikacija-na-istom-serveru).
+
+> Ako nemaš domenu/proxy i želiš izravni pristup na **http://IP:8010/**,
+> u `docker-compose.yml` zamijeni `"127.0.0.1:8010:8000"` s `"8010:8000"`
+> i otvori port 8010 na firewallu. Ako je 8010 zauzet, promijeni lijevi
+> broj porta (npr. `"8020:8000"`).
 
 ### Korisne naredbe
 
@@ -147,18 +154,31 @@ systemctl restart pjesme
 
 Ako na VPS-u već rade druge aplikacije, vrijede dva pravila:
 
-1. **Svaka aplikacija na svom portu.** Pjesme zadano koriste port 8010;
-   prije pokretanja provjeri što je zauzeto (`ss -tlnp` ili `docker ps`)
-   i po potrebi promijeni lijevi broj porta u `docker-compose.yml`.
-2. **Port 80 drži zajednički ulaz (nginx), a ne pojedina aplikacija.**
-   Kad poželiš početnu stranicu s loginom i sve aplikacije iza nje:
-   - u `docker-compose.yml` ograniči pjesme na localhost
-     (`"127.0.0.1:8010:8000"`),
-   - u nginxu dodaj `location /pjesme/` blok — gotov primjer je u
-     komentaru na dnu `deploy/nginx-pjesme.conf` (aplikacija je spremna
-     za rad iza prefiksa),
-   - login najjednostavnije dodaš nginx *basic authom*
-     (`auth_basic` + `htpasswd`) na razini cijelog server bloka.
+1. **Svaka aplikacija na svom lokalnom portu.** Pjesme zadano koriste
+   `127.0.0.1:8010`; prije pokretanja provjeri što je zauzeto
+   (`ss -tlnp` ili `docker ps`) i po potrebi promijeni lijevi broj porta
+   u `docker-compose.yml`.
+2. **Port 80/443 drži zajednički ulaz (Caddy ili nginx), a ne pojedina
+   aplikacija.** Svaka aplikacija dobije svoju putanju ili poddomenu.
+
+### Caddy: aplikacija na putanji postojeće domene
+
+Ako portom 80 već upravlja **Caddy**, pjesme dodaš na putanju domene
+(npr. `https://josip.cloud/print_pjesme`) s dvije direktive u
+`/etc/caddy/Caddyfile` — gotov primjer s napomenama je u
+**`deploy/Caddyfile-primjer`**. Nakon izmjene:
+
+```bash
+caddy validate --config /etc/caddy/Caddyfile
+systemctl reload caddy
+```
+
+### Nginx: putanja ili portal s loginom
+
+Za nginx je gotov `location /pjesme/` primjer u komentaru na dnu
+`deploy/nginx-pjesme.conf`. Zajednički login za sve aplikacije
+najjednostavnije dodaš nginx *basic authom* (`auth_basic` + `htpasswd`)
+na razini cijelog server bloka (u Caddyju: `basic_auth` direktiva).
 
 ---
 
@@ -170,12 +190,12 @@ otvori portove:
 | Port | Namjena |
 |------|---------|
 | 22   | SSH     |
-| 8010 | Pjesme Print (Docker, izravni pristup) |
-| 80   | HTTP (portal/nginx) |
-| 443  | HTTPS (ako koristiš certifikat) |
+| 80   | HTTP (Caddy/nginx) |
+| 443  | HTTPS   |
+| 8010 | samo ako želiš izravni pristup aplikaciji bez proxyja |
 
 ```bash
-ufw allow 22 && ufw allow 8010 && ufw allow 80 && ufw allow 443
+ufw allow 22 && ufw allow 80 && ufw allow 443
 ufw enable
 ```
 
