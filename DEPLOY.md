@@ -49,7 +49,13 @@ cd pjesme_print
 docker compose up -d --build
 ```
 
-To je to — aplikacija je dostupna na **http://IP-ADRESA/**.
+To je to — aplikacija je dostupna na **http://IP-ADRESA:8010/**.
+
+> Aplikacija namjerno koristi port **8010**, a ne 80 — tako port 80 ostaje
+> slobodan za zajednički portal ili druge aplikacije na istom serveru
+> (vidi [Više aplikacija na istom serveru](#više-aplikacija-na-istom-serveru)).
+> Ako je 8010 zauzet, promijeni lijevi broj u `ports` u `docker-compose.yml`
+> (npr. `"8020:8000"`).
 
 ### Korisne naredbe
 
@@ -130,10 +136,29 @@ systemctl restart pjesme
    ```
    Certbot sam uređuje nginx konfiguraciju i obnavlja certifikat.
 
-   **Opcija A (Docker):** u `docker-compose.yml` zamijeni `"80:8000"` s
-   `"127.0.0.1:8000:8000"`, zatim instaliraj nginx na host
+   **Opcija A (Docker):** u `docker-compose.yml` zamijeni `"8010:8000"` s
+   `"127.0.0.1:8010:8000"`, zatim instaliraj nginx na host
    (`apt install -y nginx`), postavi ga po koracima B4 i pokreni certbot kao
    gore.
+
+---
+
+## Više aplikacija na istom serveru
+
+Ako na VPS-u već rade druge aplikacije, vrijede dva pravila:
+
+1. **Svaka aplikacija na svom portu.** Pjesme zadano koriste port 8010;
+   prije pokretanja provjeri što je zauzeto (`ss -tlnp` ili `docker ps`)
+   i po potrebi promijeni lijevi broj porta u `docker-compose.yml`.
+2. **Port 80 drži zajednički ulaz (nginx), a ne pojedina aplikacija.**
+   Kad poželiš početnu stranicu s loginom i sve aplikacije iza nje:
+   - u `docker-compose.yml` ograniči pjesme na localhost
+     (`"127.0.0.1:8010:8000"`),
+   - u nginxu dodaj `location /pjesme/` blok — gotov primjer je u
+     komentaru na dnu `deploy/nginx-pjesme.conf` (aplikacija je spremna
+     za rad iza prefiksa),
+   - login najjednostavnije dodaš nginx *basic authom*
+     (`auth_basic` + `htpasswd`) na razini cijelog server bloka.
 
 ---
 
@@ -145,11 +170,12 @@ otvori portove:
 | Port | Namjena |
 |------|---------|
 | 22   | SSH     |
-| 80   | HTTP    |
+| 8010 | Pjesme Print (Docker, izravni pristup) |
+| 80   | HTTP (portal/nginx) |
 | 443  | HTTPS (ako koristiš certifikat) |
 
 ```bash
-ufw allow 22 && ufw allow 80 && ufw allow 443
+ufw allow 22 && ufw allow 8010 && ufw allow 80 && ufw allow 443
 ufw enable
 ```
 

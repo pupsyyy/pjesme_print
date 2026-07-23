@@ -55,7 +55,8 @@ PAGE = """<!doctype html>
   <p class="sub">Konverzija PDF pjesmarice u Word dokument.<br>
      Svaka stranica PDF-a = jedna pjesma.</p>
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
-  <form action="/convert" method="post" enctype="multipart/form-data">
+  <!-- Relativna adresa: radi i samostalno i iza reverse proxyja (npr. /pjesme/) -->
+  <form action="convert" method="post" enctype="multipart/form-data">
     <input type="file" name="pdf" accept=".pdf,application/pdf" required>
     <button type="submit">Konvertiraj u Word</button>
   </form>
