@@ -1,0 +1,12 @@
+services:
+  pjesme:
+    build: .
+    container_name: pjesme_print
+    restart: unless-stopped
+    ports:
+      # Aplikacija dostupna izravno na http://IP-servera/
+      - "80:8000"
+      # Ako ispred stavljaš nginx + HTTPS (vidi DEPLOY.md), zamijeni gornju liniju s:
+      # - "127.0.0.1:8000:8000"
+    environment:
+      - MAX_UPLOAD_MB=50

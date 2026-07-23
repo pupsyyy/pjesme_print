@@ -1,0 +1,10 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+venv
+*.docx
+*.pdf
+deploy
+DEPLOY.md
+README.md
