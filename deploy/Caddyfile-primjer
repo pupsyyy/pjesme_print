@@ -1,0 +1,35 @@
+# Pjesme Print na putanji postojeće domene koju poslužuje Caddy,
+# npr. https://josip.cloud/print_pjesme
+#
+# Ove dvije direktive dodaj UNUTAR postojećeg site bloka za domenu
+# u /etc/caddy/Caddyfile:
+#
+#   josip.cloud {
+#       # ...postojeća konfiguracija...
+#
+#       redir /print_pjesme /print_pjesme/
+#       handle_path /print_pjesme/* {
+#           reverse_proxy 127.0.0.1:8010
+#       }
+#   }
+#
+# handle_path automatski skida prefiks /print_pjesme prije prosljeđivanja,
+# a aplikacija je pripremljena za rad iza prefiksa.
+#
+# Napomena: ako postojeći blok na korijenu (/) poslužuje drugu aplikaciju
+# "golom" reverse_proxy ili file_server direktivom, umotaj je u
+# handle { ... } da se rute uredno razdvoje, npr:
+#
+#   josip.cloud {
+#       redir /print_pjesme /print_pjesme/
+#       handle_path /print_pjesme/* {
+#           reverse_proxy 127.0.0.1:8010
+#       }
+#       handle {
+#           reverse_proxy 127.0.0.1:3000   # postojeća aplikacija na /
+#       }
+#   }
+#
+# Provjera i primjena izmjena:
+#   caddy validate --config /etc/caddy/Caddyfile
+#   systemctl reload caddy
