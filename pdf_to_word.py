@@ -26,12 +26,28 @@ FONT_SIZE_TITLE = 26
 FONT_SIZE_NORMAL = 11
 COLOR_BLACK = RGBColor(0, 0, 0)
 
+# Zadani stil; web sučelje šalje vlastite vrijednosti
+STYLE_DEFAULTS = {
+    "font": FONT_NAME,
+    "title_size": FONT_SIZE_TITLE,
+    "body_size": FONT_SIZE_NORMAL,
+    "margin_cm": 2.5,
+    "page_break": True,
+}
+
 # Labele sekcija koje se ispisuju boldano
 SECTION_LABELS = re.compile(
     r"^(Chorus|Verse\s*\d*|Bridge|Intro|Outro|Pre-?Chorus|Tag|"
     r"V\d+(?:\s*\([^)]+\))?|C\d+|B\d*|BRIDGE|Verse|verse|chorus)\s*$",
     re.IGNORECASE,
 )
+
+
+def _style(style=None):
+    merged = dict(STYLE_DEFAULTS)
+    if style:
+        merged.update({k: v for k, v in style.items() if v is not None})
+    return merged
 
 
 # ── Pomoćne funkcije za Word ───────────────────────────────────────────────────
@@ -47,9 +63,10 @@ def set_paragraph_spacing(para, before=0, after=0, line_spacing=None):
     pPr.append(spacing)
 
 
-def add_run(para, text, bold=False, size=FONT_SIZE_NORMAL, italic=False):
+def add_run(para, text, bold=False, size=FONT_SIZE_NORMAL, italic=False,
+            font=FONT_NAME):
     run = para.add_run(text)
-    run.font.name = FONT_NAME
+    run.font.name = font
     run.font.size = Pt(size)
     run.font.bold = bold
     run.font.italic = italic
@@ -57,7 +74,7 @@ def add_run(para, text, bold=False, size=FONT_SIZE_NORMAL, italic=False):
     return run
 
 
-def add_title_paragraph(doc, title_text, key_text):
+def add_title_paragraph(doc, title_text, key_text, st):
     """Naslov lijevo + Key desno u istom odlomku s tabulatorom."""
     para = doc.add_paragraph()
     para.alignment = WD_ALIGN_PARAGRAPH.LEFT
@@ -73,65 +90,57 @@ def add_title_paragraph(doc, title_text, key_text):
     pPr.append(tabs)
 
     run_title = para.add_run(title_text)
-    run_title.font.name = FONT_NAME
-    run_title.font.size = Pt(FONT_SIZE_TITLE)
+    run_title.font.name = st["font"]
+    run_title.font.size = Pt(st["title_size"])
     run_title.font.bold = True
     run_title.font.color.rgb = COLOR_BLACK
 
     if key_text:
         run_tab = para.add_run("\t")
-        run_tab.font.name = FONT_NAME
-        run_tab.font.size = Pt(FONT_SIZE_NORMAL)
+        run_tab.font.name = st["font"]
+        run_tab.font.size = Pt(st["body_size"])
 
         run_key = para.add_run(key_text)
-        run_key.font.name = FONT_NAME
-        run_key.font.size = Pt(FONT_SIZE_NORMAL)
+        run_key.font.name = st["font"]
+        run_key.font.size = Pt(st["body_size"])
         run_key.font.bold = False
         run_key.font.color.rgb = COLOR_BLACK
 
     return para
 
 
-def add_section_label(doc, label):
+def add_section_label(doc, label, st):
     para = doc.add_paragraph()
     set_paragraph_spacing(para, before=120, after=0)
-    add_run(para, label, bold=True)
+    add_run(para, label, bold=True, size=st["body_size"], font=st["font"])
     return para
 
 
-def add_lyric_line(doc, text):
+def add_lyric_line(doc, text, st):
     para = doc.add_paragraph()
     set_paragraph_spacing(para, before=0, after=0)
-    add_run(para, text)
+    add_run(para, text, size=st["body_size"], font=st["font"])
     return para
 
 
-def add_meta_label(doc, label, values):
+def add_meta_label(doc, label, values, st):
     """'Pjesmarica' bold, ispod njega vrijednosti normalno."""
     para_label = doc.add_paragraph()
     set_paragraph_spacing(para_label, before=0, after=0)
-    add_run(para_label, label, bold=True)
+    add_run(para_label, label, bold=True, size=st["body_size"], font=st["font"])
 
     for val in values:
         para_val = doc.add_paragraph()
         set_paragraph_spacing(para_val, before=0, after=0)
-        add_run(para_val, val)
+        add_run(para_val, val, size=st["body_size"], font=st["font"])
 
     return para_label
 
 
-def add_plain_line(doc, text):
-    """Redak koji nije ni label ni lyric – samo tekst (npr. napomene)."""
+def add_empty_line(doc, st):
     para = doc.add_paragraph()
     set_paragraph_spacing(para, before=0, after=0)
-    add_run(para, text)
-    return para
-
-
-def add_empty_line(doc):
-    para = doc.add_paragraph()
-    set_paragraph_spacing(para, before=0, after=0)
-    add_run(para, "")
+    add_run(para, "", size=st["body_size"], font=st["font"])
     return para
 
 
@@ -193,18 +202,23 @@ def parse_page(page):
                 key_parts.append(tr)
             break
 
-    # Redak odmah ispod naslova – može biti podnaslov (italic/manji font)
-    # ili može biti "Capo N" ili "No" itd.
-    # Heuristika: ako sljedeći red ima tekst i nije "Pjesmarica", tretiramo
-    # ga kao podnaslov ako ne počinje s "Key:" i nije broj
+    # Redci odmah ispod naslova sa SAMO desnim tekstom = nastavak Key
+    # (npr. "Key: A" pa "Capo 1" u zasebnim redovima)
     next_idx = title_idx + 1
-    if next_idx < len(raw_lines):
-        y2, lx2, tl2, tr2 = raw_lines[next_idx]
+    while next_idx < len(raw_lines):
+        _, _, tl2, tr2 = raw_lines[next_idx]
         if tr2 and not tl2:
-            # samo desno -> nastavak Key (Capo)
             key_parts.append(tr2)
             next_idx += 1
-        elif tl2 and not tl2.startswith("Pjesmarica") and not re.match(r"^\d+$", tl2):
+        else:
+            break
+
+    # Redak ispod – može biti podnaslov (italic/manji font) ili "No" itd.
+    # Heuristika: ako sljedeći red ima tekst i nije "Pjesmarica", tretiramo
+    # ga kao podnaslov ako ne počinje s "Key:" i nije broj
+    if next_idx < len(raw_lines):
+        y2, lx2, tl2, tr2 = raw_lines[next_idx]
+        if tl2 and not tl2.startswith("Pjesmarica") and not re.match(r"^\d+$", tl2):
             # kratki redak bez labels = podnaslov
             if len(tl2.split()) <= 6 and not SECTION_LABELS.match(tl2):
                 # provjeri je li sljedeći redak Pjesmarica ili prazan
@@ -296,66 +310,96 @@ def parse_page(page):
     }
 
 
+def parse_pdf(pdf_path, log=None):
+    """Parsira cijeli PDF -> lista pjesama (dict po parse_page)."""
+    songs = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_num, page in enumerate(pdf.pages, 1):
+            song = parse_page(page)
+            if song and song["title"]:
+                songs.append(song)
+                if log:
+                    log(f"  Stranica {page_num}: {song['title']}")
+            elif log:
+                log(f"  Stranica {page_num}: (preskočena – nema sadržaja)")
+    return songs
+
+
 # ── Pisanje jedne pjesme u Word dokument ──────────────────────────────────────
 
-def write_song(doc, song, add_page_break=False):
+def write_song(doc, song, add_page_break=False, style=None):
+    st = _style(style)
     if add_page_break:
         doc.add_page_break()
 
     # Naslov + Key
-    add_title_paragraph(doc, song["title"], song["key"])
+    add_title_paragraph(doc, song["title"], song["key"], st)
 
     # Podnaslov (npr. "Božja Pobjeda", "Papa Band")
     if song["subtitle"]:
         para = doc.add_paragraph()
         set_paragraph_spacing(para, before=0, after=0)
-        add_run(para, song["subtitle"])
+        add_run(para, song["subtitle"], size=st["body_size"], font=st["font"])
 
     # Pjesmarica
     if song["pjesmarica"]:
-        add_empty_line(doc)
-        add_meta_label(doc, "Pjesmarica", song["pjesmarica"])
+        add_empty_line(doc, st)
+        add_meta_label(doc, "Pjesmarica", song["pjesmarica"], st)
 
     # Napomene (tekst prije sekcija)
     if song["notes"]:
-        add_empty_line(doc)
+        add_empty_line(doc, st)
         for note in song["notes"]:
             if note == "":
-                add_empty_line(doc)
+                add_empty_line(doc, st)
             else:
-                add_plain_line(doc, note)
+                add_lyric_line(doc, note, st)
 
     # Sekcije
     for label, lines in song["sections"]:
-        add_empty_line(doc)
+        add_empty_line(doc, st)
         if label:
-            add_section_label(doc, label)
+            add_section_label(doc, label, st)
         # Grupiraj linije u blokove odvojene praznim recima
         for line in lines:
             if line == "":
-                add_empty_line(doc)
+                add_empty_line(doc, st)
             else:
-                add_lyric_line(doc, line)
+                add_lyric_line(doc, line, st)
 
 
 # ── Postavljanje margina dokumenta ────────────────────────────────────────────
 
-def setup_document():
+def setup_document(style=None):
+    st = _style(style)
     doc = Document()
     section = doc.sections[0]
-    section.top_margin = Cm(2.5)
-    section.bottom_margin = Cm(2.5)
-    section.left_margin = Cm(2.5)
-    section.right_margin = Cm(2.5)
+    section.top_margin = Cm(st["margin_cm"])
+    section.bottom_margin = Cm(st["margin_cm"])
+    section.left_margin = Cm(st["margin_cm"])
+    section.right_margin = Cm(st["margin_cm"])
 
     # Ukloni zadani razmak između odlomaka
-    style = doc.styles["Normal"]
-    style.font.name = FONT_NAME
-    style.font.size = Pt(FONT_SIZE_NORMAL)
-    pf = style.paragraph_format
+    doc_style = doc.styles["Normal"]
+    doc_style.font.name = st["font"]
+    doc_style.font.size = Pt(st["body_size"])
+    pf = doc_style.paragraph_format
     pf.space_before = Pt(0)
     pf.space_after = Pt(0)
 
+    return doc
+
+
+def build_docx(songs, style=None):
+    """Složi Word dokument iz liste pjesama; vraća Document objekt."""
+    st = _style(style)
+    doc = setup_document(st)
+    for idx, song in enumerate(songs):
+        add_break = idx > 0 and st["page_break"]
+        if idx > 0 and not st["page_break"]:
+            add_empty_line(doc, st)
+            add_empty_line(doc, st)
+        write_song(doc, song, add_page_break=add_break, style=st)
     return doc
 
 
@@ -363,26 +407,13 @@ def setup_document():
 
 def convert_pdf_to_docx(pdf_path: str, docx_path: str):
     print(f"Učitavam: {pdf_path}")
-    songs = []
-
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_num, page in enumerate(pdf.pages, 1):
-            song = parse_page(page)
-            if song and song["title"]:
-                songs.append(song)
-                print(f"  Stranica {page_num}: {song['title']}")
-            else:
-                print(f"  Stranica {page_num}: (preskočena – nema sadržaja)")
+    songs = parse_pdf(pdf_path, log=print)
 
     if not songs:
         print("Nije pronađena nijedna pjesma!")
         return
 
-    doc = setup_document()
-
-    for idx, song in enumerate(songs):
-        write_song(doc, song, add_page_break=(idx > 0))
-
+    doc = build_docx(songs)
     doc.save(docx_path)
     print(f"\nSpremi kao: {docx_path}")
     print(f"Ukupno pjesama: {len(songs)}")
