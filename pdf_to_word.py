@@ -465,15 +465,19 @@ def set_columns(doc, n_cols, margin_cm=0.5):
 def song_compact_blocks(song):
     """Pjesma -> [(je_refren, linija), ...] za kompaktni ispis.
 
-    Naslov, tonalitet i Pjesmarica blok se izostavljaju; napomene i sekcije
-    bez labele idu kao kitica (normalno), Chorus/Bridge/Tag/Outro kao refren
-    (uvučeno, bold+kurziv). Prazni retci se preskaču.
+    Naslov, tonalitet, Pjesmarica blok i napomene se izostavljaju (kao u
+    originalu); sekcije bez labele idu kao kitica (normalno), a
+    Chorus/Bridge/Tag/Outro kao refren (uvučeno, bold+kurziv). Prazni retci
+    se preskaču. Iznimka: pjesma bez ijedne sekcije (tekst unesen u editoru
+    bez labela) ispisuje napomene kao kitice, da se sadržaj tiho ne izgubi.
     """
     out = []
-    for note in song.get("notes") or []:
-        if note:
-            out.append((False, note))
-    for label, lines in song.get("sections") or []:
+    sections = song.get("sections") or []
+    if not sections:
+        for note in song.get("notes") or []:
+            if note:
+                out.append((False, note))
+    for label, lines in sections:
         chorus = bool(label and CHORUS_TYPES.match(label))
         for line in lines:
             if line:
