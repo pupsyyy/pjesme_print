@@ -3,30 +3,45 @@
 > Sažetak stanja projekta za nastavak rada u novom razgovoru.
 > Zadnje ažuriranje: 2026-07-24.
 
-## ⚠️ VAŽNO PRVO PROČITATI: dvije verzije projekta u sukobu
+## ✅ ODLUKA (2026-07-24): originalna verzija A je referentni format
 
-Ovaj projekt trenutno postoji u **dvije potpuno različite verzije** koje su se
-razvijale u **dva paralelna razgovora** i **naizmjenično prepisuju istu granu**
-`claude/zealous-bohr-YwV9B` (force-push). Grana je danas već nekoliko puta
-"skočila" s jedne verzije na drugu.
+Dogovoreno s korisnikom: **Verzija A (Streamlit "gusti tisak") je originalni,
+referentni format i izvor istine za IZGLED izlaza.** Zadatak dalje je
+**prilagoditi Flask verziju (B) da proizvodi ISTI format kao A** (landscape,
+2–3 stupca, bez naslova/labela, refren uvučen bold-italic, razdjelnici, akordi
+uklonjeni). Flask ostaje kao sučelje/editor + VPS deploy, ali njegov PDF/Word
+izlaz mora izgledati kao A.
 
-| | Verzija A — Streamlit "gusti tisak" | Verzija B — Flask editor |
+Zato: kad radiš izgled — **A je spec**. Kad radiš sučelje/hosting — gledaj B.
+
+### Gdje je koja verzija (VAŽNO — grana se prepisuje force-pushom)
+
+Dva paralelna razgovora pushaju na `claude/zealous-bohr-YwV9B`, pa se ta grana
+naizmjenično prepisuje. Zato su verzije spremljene na **stabilne grane**:
+
+| | Verzija A — Streamlit "gusti tisak" (SPEC) | Verzija B — Flask editor |
 |---|---|---|
+| **Stabilna grana** | `claude/zealous-bohr-YwV9B` (trenutno) | **`flask-editor`** (sačuvana ovdje!) |
 | **Sučelje** | Streamlit (upload → download) | Flask, editor u pregledniku, tamna tema |
-| **Izgled** | A4 **landscape, 2–3 stupca**, bez naslova/labela; refren uvučen bold-italic; razdjelnik `___` | A4 **portret**, naslov lijevo + Key desno, bold labele, 1 pjesma/stranica |
+| **Izgled** | A4 **landscape, 2–3 stupca**, bez naslova/labela; refren uvučen bold-italic; razdjelnik `___` | A4 **portret**, naslov+Key, bold labele, 1 pjesma/stranica |
 | **Akordi** | **automatski uklonjeni** | zadržani |
-| **Opcije** | font, veličina, broj stupaca | font, veličine, margine, page break |
 | **Deploy** | Streamlit Cloud | Hostinger VPS (Docker/nginx/Caddy) |
 | **Ključne datoteke** | `app.py` (streamlit), `pdf_to_word.py`, `packages.txt` | `app.py` (flask), `pdf_to_word.py`, `pdf_writer.py`, `DEPLOY.md`, `deploy/`, `Dockerfile` |
 
-**Trenutno na disku / na vrhu grane je Verzija A (Streamlit).** Ako `git clone`
-pokaže `import streamlit` u `app.py` → to je A. Ako pokaže `from flask import` →
-to je B.
+- Verzija A dohvat: `git checkout claude/zealous-bohr-YwV9B` (ili grana s `import streamlit` u `app.py`).
+- Verzija B dohvat: `git checkout flask-editor` (`from flask import` u `app.py`).
+- Ako se grana `claude/zealous-bohr-YwV9B` opet prepiše na Flask, verzija A se
+  može vratiti iz git povijesti (Streamlit commitovi, npr. `Redizajn outputa:
+  A4 landscape … stupca`, `Detektira i uklanja redove s akordima`).
 
-**Prvi korak u novom razgovoru:** s korisnikom odlučiti KOJU verziju zadržati
-(ili ih spojiti u jednu aplikaciju s izborom formata) i tek onda raditi, inače
-će se rad opet prepisati. Verzija B ima gotov VPS deploy; Verzija A ima gusti
-format za tisak koji je korisnik izričito tražio (stupci, bez akorda).
+### Konkretan sljedeći zadatak
+Prenijeti logiku izgleda iz A u B:
+1. U B-ov PDF izvoz (`pdf_writer.py`) i Word izvoz (`pdf_to_word.py:build_docx`)
+   dodati landscape + `BalancedColumns`/stupce, izbaciti naslov/labele, uvući
+   refren (bold-italic), umetnuti razdjelnike među pjesmama.
+2. Dodati **uklanjanje akorda** (`is_chord_line` iz verzije A) u B-ov parser.
+3. Dodati opcije u Flask UI: broj stupaca (2/3, default 3), veličina teksta
+   (default 9pt), font.
 
 ---
 
