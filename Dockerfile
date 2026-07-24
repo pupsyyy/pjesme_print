@@ -3,9 +3,10 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# TTF fontovi za PDF izvoz (hrvatske dijakritike)
+# TTF fontovi za PDF izvoz (hrvatske dijakritike; isti izbor kao original)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends fonts-liberation fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends \
+       fonts-liberation fonts-freefont-ttf fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -1,7 +1,7 @@
-# pjesme_print
+# pjesme_print — Pjesmarica konverter
 
-Web aplikacija za uređivanje PDF pjesmarice: učitaš PDF (svaka stranica =
-jedna pjesma), urediš pjesme u pregledniku i preuzmeš **novi PDF ili Word**.
+Web aplikacija za pjesmaricu: učitaš PDF (svaka stranica = jedna pjesma),
+urediš pjesme u pregledniku i preuzmeš **novi PDF ili Word**.
 
 ## Mogućnosti
 
@@ -10,9 +10,17 @@ jedna pjesma), urediš pjesme u pregledniku i preuzmeš **novi PDF ili Word**.
   (Verse, Chorus, Bridge…)
 - **Uređivanje**: tekst svake pjesme, naslov, tonalitet; redoslijed (↑↓),
   uključivanje/isključivanje pjesama kvačicom, dodavanje novih i brisanje
-- **Opcije formatiranja**: font, veličina naslova i teksta, margine,
-  pjesma na novoj stranici da/ne
-- **Izvoz**: PDF (s ispravnim hrvatskim dijakriticima) ili Word (.docx)
+- **Dva izgleda izvoza**:
+  - **Kompaktno** (zadano, original konverter): A4 ležeće, 2–3 balansirana
+    stupca, bez naslova i tonaliteta, refren/bridge uvučen **bold+kurziv**,
+    crta između pjesama — za ispis na jedan list
+  - **Klasično**: A4 uspravno, naslov + tonalitet desno, boldane labele,
+    stranica po pjesmi
+- **Uklanjanje akorda**: retci koji sadrže samo akorde (D, Am7, Fis, G/B…)
+  automatski se izostavljaju iz dokumenta (opcija, može se isključiti)
+- **Opcije**: font (Liberation Serif/Sans, FreeSerif/Sans — svi s punim
+  hrvatskim dijakriticima), veličina teksta, broj stupaca, margine
+- **Izvoz**: PDF i Word (.docx)
 - **Tamna tema** (zadano) sa prekidačem na svijetlu
 
 ## Pokretanje
