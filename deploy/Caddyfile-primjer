@@ -30,6 +30,18 @@
 #       }
 #   }
 #
+# ── Varijanta: vlastita poddomena (npr. print.josip.cloud) ────────────────────
+# 1. U DNS-u domene dodaj A zapis:  print  ->  IP adresa VPS-a
+# 2. U /etc/caddy/Caddyfile dodaj NOVI site blok (izvan postojećeg):
+#
+#   print.josip.cloud {
+#       reverse_proxy 127.0.0.1:8010
+#   }
+#
+# Caddy automatski pribavlja i obnavlja HTTPS certifikat za poddomenu
+# (DNS mora već pokazivati na server, portovi 80 i 443 otvoreni).
+# Poddomena i putanja /print_pjesme mogu raditi istovremeno.
+
 # Provjera i primjena izmjena:
 #   caddy validate --config /etc/caddy/Caddyfile
 #   systemctl reload caddy
