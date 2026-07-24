@@ -12,9 +12,11 @@ Produkcija (gunicorn):
 
 import io
 import os
+import re
 import tempfile
 from pathlib import Path
 
+import pdfplumber
 from flask import Flask, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 
@@ -193,12 +195,16 @@ def parse():
         return jsonify(error="Datoteka mora biti PDF (.pdf)."), 400
 
     stem = Path(secure_filename(file.filename)).stem[:80] or "pjesmarica"
+    # makni sufiks izlaza da se kod ponovnog uploada ne gomila (_print_print...)
+    stem = re.sub(r"_(print|out)$", "", stem) or "pjesmarica"
 
     with tempfile.TemporaryDirectory() as tmpdir:
         pdf_path = Path(tmpdir) / "ulaz.pdf"
         file.save(pdf_path)
         try:
             songs = parse_pdf(str(pdf_path))
+            with pdfplumber.open(pdf_path) as pdf_doc:
+                n_landscape = sum(1 for p in pdf_doc.pages if p.width > p.height)
         except Exception as exc:
             app.logger.exception("Parsiranje nije uspjelo")
             return jsonify(error=f"Ne mogu pročitati PDF: {exc}"), 500
@@ -206,7 +212,22 @@ def parse():
     if not songs:
         return jsonify(error="U PDF-u nije pronađena nijedna pjesma."), 422
 
-    return jsonify(filename=stem, songs=[song_to_editable(s) for s in songs])
+    # Zaštita od konvertiranja već konvertiranog ispisa: takav ulaz ima
+    # ležeće stranice i/ili crte razdjelnice kao tekst, a stupci se pri
+    # čitanju pomiješaju u jedan red.
+    warnings = []
+    all_lines = [ln for s in songs
+                 for ln in (s["notes"] + [x for _l, ls in s["sections"] for x in ls])]
+    has_divider = any(ln.strip().startswith("____") for ln in all_lines)
+    if n_landscape or has_divider:
+        warnings.append(
+            "⚠ Ova datoteka izgleda kao VEĆ KONVERTIRANI ispis (ležeće "
+            "stranice/crte između pjesama), a ne originalna pjesmarica. "
+            "Stupci se pri čitanju pomiješaju — učitaj originalni PDF "
+            "(uspravan, jedna pjesma po stranici).")
+
+    return jsonify(filename=stem, warnings=warnings,
+                   songs=[song_to_editable(s) for s in songs])
 
 
 @app.post("/export/docx")
@@ -224,7 +245,7 @@ def export_docx():
         app.logger.exception("Word izvoz nije uspio")
         return jsonify(error=f"Izvoz nije uspio: {exc}"), 500
     return send_file(
-        buf, as_attachment=True, download_name=f"{stem}.docx",
+        buf, as_attachment=True, download_name=f"{stem}_print.docx",
         mimetype="application/vnd.openxmlformats-officedocument"
                  ".wordprocessingml.document")
 
@@ -242,7 +263,7 @@ def export_pdf():
         return jsonify(error=f"Izvoz nije uspio: {exc}"), 500
     return send_file(
         io.BytesIO(pdf_bytes), as_attachment=True,
-        download_name=f"{stem}.pdf", mimetype="application/pdf")
+        download_name=f"{stem}_print.pdf", mimetype="application/pdf")
 
 
 # ── Sučelje (jedna stranica, tamna tema) ──────────────────────────────────────
@@ -352,6 +373,9 @@ PAGE = r"""<!doctype html>
   .hint { color: var(--muted); font-size: .78rem; margin: 0; }
 
   /* Toast + busy */
+  #warnBar { margin: 0; padding: .55rem 1.1rem; font-size: .85rem;
+             background: color-mix(in srgb, var(--err) 14%, var(--panel));
+             border-bottom: 1px solid var(--err); color: var(--text); }
   #toast { position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%);
            background: var(--panel); border: 1px solid var(--border);
            border-left: 4px solid var(--ok); border-radius: var(--radius);
@@ -432,6 +456,7 @@ PAGE = r"""<!doctype html>
       <button class="btn primary" id="btnPdf">⬇ PDF</button>
       <button class="btn primary" id="btnDocx">⬇ Word</button>
     </div>
+    <div id="warnBar" class="hidden"></div>
     <div class="editor">
       <aside>
         <div class="listhead">
@@ -611,6 +636,9 @@ async function doParse(file) {
     state.filename = data.filename || "pjesmarica";
     state.songs = data.songs.map(s => ({ ...s, include: true }));
     state.sel = state.songs.length ? 0 : -1;
+    const wb = $("warnBar");
+    wb.textContent = (data.warnings || []).join(" ");
+    wb.classList.toggle("hidden", !(data.warnings || []).length);
     renderList(); loadForm(); showEditor(true);
     toast("Učitano " + state.songs.length + " pjesama.");
   } catch (err) {
@@ -681,7 +709,7 @@ async function doExport(kind) {
     const blob = await res.blob();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = state.filename + (kind === "pdf" ? ".pdf" : ".docx");
+    a.download = state.filename + "_print" + (kind === "pdf" ? ".pdf" : ".docx");
     a.click();
     URL.revokeObjectURL(a.href);
     toast("Preuzimanje pokrenuto (" + songs.length + " pjesama).");
