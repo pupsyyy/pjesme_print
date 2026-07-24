@@ -3,123 +3,126 @@
 > Sažetak stanja projekta za nastavak rada u novom razgovoru.
 > Zadnje ažuriranje: 2026-07-24.
 
+## ⚠️ VAŽNO PRVO PROČITATI: dvije verzije projekta u sukobu
+
+Ovaj projekt trenutno postoji u **dvije potpuno različite verzije** koje su se
+razvijale u **dva paralelna razgovora** i **naizmjenično prepisuju istu granu**
+`claude/zealous-bohr-YwV9B` (force-push). Grana je danas već nekoliko puta
+"skočila" s jedne verzije na drugu.
+
+| | Verzija A — Streamlit "gusti tisak" | Verzija B — Flask editor |
+|---|---|---|
+| **Sučelje** | Streamlit (upload → download) | Flask, editor u pregledniku, tamna tema |
+| **Izgled** | A4 **landscape, 2–3 stupca**, bez naslova/labela; refren uvučen bold-italic; razdjelnik `___` | A4 **portret**, naslov lijevo + Key desno, bold labele, 1 pjesma/stranica |
+| **Akordi** | **automatski uklonjeni** | zadržani |
+| **Opcije** | font, veličina, broj stupaca | font, veličine, margine, page break |
+| **Deploy** | Streamlit Cloud | Hostinger VPS (Docker/nginx/Caddy) |
+| **Ključne datoteke** | `app.py` (streamlit), `pdf_to_word.py`, `packages.txt` | `app.py` (flask), `pdf_to_word.py`, `pdf_writer.py`, `DEPLOY.md`, `deploy/`, `Dockerfile` |
+
+**Trenutno na disku / na vrhu grane je Verzija A (Streamlit).** Ako `git clone`
+pokaže `import streamlit` u `app.py` → to je A. Ako pokaže `from flask import` →
+to je B.
+
+**Prvi korak u novom razgovoru:** s korisnikom odlučiti KOJU verziju zadržati
+(ili ih spojiti u jednu aplikaciju s izborom formata) i tek onda raditi, inače
+će se rad opet prepisati. Verzija B ima gotov VPS deploy; Verzija A ima gusti
+format za tisak koji je korisnik izričito tražio (stupci, bez akorda).
+
+---
+
 ## 1. Što je projekt
 
-Web aplikacija koja od **PDF pjesmarice** radi uredljivu verziju i izvozi
-**novi PDF ili Word (.docx)**. Ulazni PDF ima **jednu pjesmu po stranici**
-(export iz aplikacije tipa OnSong / SongSelect: naslov, tonalitet, broj u
-pjesmarici, sekcije Verse/Chorus/Bridge…). Aplikacija to parsira, korisnik
-uredi u pregledniku i preuzme čist dokument za tisak.
+Alat koji od **PDF pjesmarice** (jedna pjesma po stranici, export iz aplikacije
+tipa OnSong/SongSelect s naslovom, tonalitetom, sekcijama Verse/Chorus/Bridge)
+radi čist dokument za tisak — **PDF i/ili Word (.docx)**.
 
 - **Repo:** `pupsyyy/pjesme_print`
-- **Aktivna grana:** `claude/zealous-bohr-YwV9B` (na njoj je sav aktualni kod;
-  `main` je iza nje)
-- **Jezik sučelja i koda:** hrvatski (komentari, poruke, UI)
+- **Grana:** `claude/zealous-bohr-YwV9B`
+- **Jezik:** hrvatski (UI, komentari, commit poruke)
 - **Vlasnik:** jivancic.st@gmail.com
 
-## 2. Arhitektura / datoteke
+## 2. Verzija A — Streamlit "gusti tisak" (trenutno na disku)
 
-| Datoteka | Uloga |
-|----------|-------|
-| `app.py` | **Flask** web aplikacija: rute `/`, `/parse`, `/export/docx`, `/export/pdf`, `/health`. Sadrži i cijeli frontend (jedna HTML/JS stranica u varijabli `PAGE`, tamna tema). |
-| `pdf_to_word.py` | Parsiranje PDF-a (`parse_pdf`, `parse_page`) **i** izvoz u Word (`build_docx`, `write_song`, `setup_document`). Sadrži `SECTION_LABELS` regex. Radi i kao CLI: `python pdf_to_word.py ulaz.pdf izlaz.docx`. |
-| `pdf_writer.py` | Izvoz u PDF preko **reportlab** (`build_pdf(songs, style)`). Ugrađuje TTF fontove (Liberation/DejaVu) radi ispravnih **hrvatskih dijakritika**. |
-| `requirements.txt` | flask, gunicorn, pdfplumber, python-docx, reportlab |
-| `Dockerfile`, `docker-compose.yml` | Docker deploy (gunicorn, vezan na `127.0.0.1:8010:8000`). |
-| `deploy/` | `pjesme.service` (systemd), `nginx-pjesme.conf`, `Caddyfile-primjer`. |
-| `DEPLOY.md` | Detaljne upute za Hostinger VPS (Docker ili venv+systemd+nginx, Caddy za putanju domene). |
-| `README.md` | Kratki opis + pokretanje. |
+### Datoteke
+- `app.py` — Streamlit sučelje: upload PDF-a, opcije (slider veličine teksta
+  7–14pt, radio 2/3 stupca, dropdown font), gumbi za download `.docx` i `.pdf`.
+- `pdf_to_word.py` — parsiranje **i** izvoz. Glavne funkcije:
+  - `load_songs(pdf_path)` → lista pjesama (svaka = lista blokova `(tip, linije)`,
+    tip ∈ `"verse"`/`"chorus"`)
+  - `setup_document(font_size, n_cols, font)` → Word `Document`
+  - `write_song(doc, blocks, first, font_size, font)`
+  - `convert_pdf_to_pdf(songs, out_path, font_size, n_cols, font)` — reportlab
+  - `FONT_CHOICES`, `DEFAULT_FONT`, `DEFAULT_FONT_SIZE=9`, `DEFAULT_N_COLS=3`
+  - `is_chord_line(line)` — detekcija reda s akordima
+- `packages.txt` — `fonts-liberation`, `fonts-freefont-ttf` (za Streamlit Cloud)
+- `requirements.txt` — streamlit, pdfplumber, python-docx, reportlab
 
-## 3. Model podataka (pjesma)
+### Ključni detalji
+- **Izgled:** A4 landscape, `n_cols` stupaca (`BalancedColumns`), margine 0.5cm,
+  razdjelnik `"_"*35` između pjesama. Verse = normalno, Chorus/Bridge = uvučeno
+  (18pt), bold+italic.
+- **Uklanjanje akorda:** `is_chord_line` — red je akordni ako su **svi** tokeni
+  validni akordi (hrv./njem. notacija: `[CDEFGAHB]` + is/es/#/b + m/maj/dim/sus…
+  + broj + slash-akord), i svaki token ≤ 7 znakova. Takvi se redovi preskaču.
+- **Hrvatski znakovi u PDF-u:** obavezni TTF fontovi. `_find_font_file()`
+  dinamički traži fajl po više putanja + `find` fallback (jer se Streamlit Cloud
+  putanje razlikuju od lokalnih). Fontovi: Liberation Serif/Sans, FreeSerif/Sans.
+- **Parsiranje** (`parse_page`): preskače naslov, podnaslov, "Pjesmarica" blok i
+  napomene; ostatak dijeli na sekcije preko `ANY_SECTION`/`CHORUS_TYPES` regexa
+  (prepoznaje i `Chorus 1`, `C1`, `Verse 2`, `V2`…).
+- **CLI:** `python pdf_to_word.py ulaz.pdf` → `ulaz_out.docx` + `ulaz_out.pdf`;
+  `python pdf_to_word.py ulaz.pdf izlaz.pdf` → samo taj format.
 
-`parse_pdf` vraća listu pjesama; svaka je dict:
+### Deploy (Streamlit Cloud)
+share.streamlit.io → New app → repo `pupsyyy/pjesme_print`, grana
+`claude/zealous-bohr-YwV9B` (ili posebna), main file `app.py`. Repo mora biti
+javan ILI dati Streamlitu pristup. Automatski redeploy na svaki push.
+(Korisnik je već imao app na `pjesme.streamlit.app`.)
 
-```python
-{
-    "title": str,               # naslov (prvi, najveći red)
-    "key": str,                 # tonalitet, npr. "Key: A (Ab)\nCapo 1" (desno gore)
-    "subtitle": str | None,     # red ispod naslova (npr. "Papa Band")
-    "pjesmarica": list[str],    # brojevi ispod labele "Pjesmarica"
-    "notes": list[str],         # tekst prije prve sekcije (upute za sviranje…)
-    "sections": list[[label, list[str]]],  # label = "Verse"/"Chorus"/… ili None
-}
-```
+## 3. Verzija B — Flask editor (bila na disku ranije danas)
 
-Frontend ovo pretvara u uredljiva polja (`song_to_editable`) i natrag
-(`editable_to_song` / `body_to_parts` u `app.py`). Sekcije se u editoru
-prikazuju kao običan tekst gdje labela stoji u svom retku.
+> Nije trenutno na disku, ali je kompletna i na remoteu je bila do prije par
+> commitova. Vraća se s `git checkout 10bab02 -- .` ili s odgovarajuće grane/PR-a
+> (PR #1–#6, poruke "Novo sučelje…", "…hostinger-vps…").
 
-## 4. Opcije formatiranja (izvoz)
+- `app.py` (Flask): rute `/`, `/parse`, `/export/docx`, `/export/pdf`, `/health`;
+  cijeli frontend u varijabli `PAGE` (jedna stranica, tamna tema, editor sa
+  redoslijedom ↑↓, uključi/isključi pjesmu, uredi tekst).
+- `pdf_to_word.py` (druga verzija!): `parse_pdf`, `parse_page`, `build_docx`,
+  `write_song`, `setup_document`, `SECTION_LABELS`. Model pjesme je **dict**:
+  `{title, key, subtitle, pjesmarica, notes, sections:[[label,lines]]}`.
+- `pdf_writer.py`: `build_pdf(songs, style)` (reportlab, TTF za dijakritike).
+- Opcije: `FONTS=(Calibri,Arial,Verdana,Cambria,Times New Roman,Georgia)`,
+  `title_size` 12–48/26, `body_size` 7–20/11, `margin_cm` 0.5–4/2.5, `page_break`.
+- `DEPLOY.md` + `deploy/` (systemd `pjesme.service`, `nginx-pjesme.conf`,
+  `Caddyfile-primjer`) + `Dockerfile`/`docker-compose.yml`: Hostinger VPS,
+  app na `127.0.0.1:8010`, iza Caddy/nginx na putanji domene.
 
-Šalju se iz frontenda, validiraju u `parse_options` (`app.py`):
-
-- `font` — jedan od `FONTS = (Calibri, Arial, Verdana, Cambria, Times New Roman, Georgia)`
-- `title_size` (12–48, default 26)
-- `body_size` (7–20, default 11)
-- `margin_cm` (0.5–4.0, default 2.5)
-- `page_break` (bool, default True — svaka pjesma na novoj stranici)
-
-U PDF-u se Word-font mapira na obitelj (`_FAMILY_BY_FONT` u `pdf_writer.py`):
-Calibri/Arial/Verdana → sans (Liberation Sans / DejaVu Sans),
-Cambria/Times/Georgia → serif (Liberation Serif / DejaVu Serif).
-
-## 5. Trenutni izgled izlaza
-
-**Portret A4, jedna pjesma po stranici.** Raspored:
-- Naslov (bold, velik) lijevo + tonalitet desno (desni tab / tablica)
-- Podnaslov ispod naslova
-- "Pjesmarica" (bold) + brojevi
-- Napomene
-- Sekcije: **bold labela** (Verse/Chorus/…) pa stihovi normalno
-
-## 6. Pokretanje
-
+### Pokretanje B
 ```bash
-pip install -r requirements.txt
-python app.py                      # http://localhost:8000
-# ili produkcijski:
-gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 300 app:app
+pip install -r requirements.txt   # flask, gunicorn, pdfplumber, python-docx, reportlab
+python app.py                     # http://localhost:8000
 ```
 
-Deploy na Hostinger VPS → vidi `DEPLOY.md` (Docker `docker compose up -d --build`,
-app na `127.0.0.1:8010`, izvana kroz Caddy/nginx na putanji domene).
+## 4. Kontekst želja korisnika (iz razgovora)
 
-## 7. Ključni detalji implementacije
+- Traži **gust format za tisak**: landscape, 2–3 stupca (default 3), male margine,
+  bez naslova/labela, **akordi uklonjeni**, refren vizualno odvojen (uvučen). → to je Verzija A.
+- Font i veličina teksta trebaju biti **izborni**. Default 9pt, 3 stupca.
+- Želi koristiti **s mobitela** → web app (native `.apk` odbačen kao nepraktičan).
+- Razmatrao i Streamlit Cloud i Hostinger VPS za hosting.
 
-- **Parsiranje pozicijom:** `parse_page` grupira riječi po `y` koordinati;
-  desna polovina stranice (`x > 0.55*width`) tretira se kao zona tonaliteta (Key/Capo).
-- **Hrvatski znakovi u PDF-u:** obavezni ugrađeni TTF fontovi. Standardni
-  reportlab fontovi (Times/Helvetica) **ne** podržavaju š/č/ć/ž/đ →
-  fallback samo ako TTF ne postoji. Docker slika instalira `fonts-liberation`.
-- **Upload limit:** `MAX_UPLOAD_MB` (env, default 50), `MAX_SONGS = 500`.
-- **`SECTION_LABELS` regex** prepoznaje: Chorus, Verse N, Bridge, Intro, Outro,
-  Pre-Chorus, Tag, V1/V2…, C1/C2…, B…
+## 5. Mogući sljedeći koraci
 
-## 8. Povijest / alternativni pravac (VAŽNO za kontekst)
+- [ ] **Odlučiti A vs B** (ili spojiti: jedan app, opcija "način izgleda").
+- [ ] Ako A: očistiti repo od Flask/deploy datoteka ili obrnuto — trenutno se
+      miješaju kroz force-push.
+- [ ] Dogovoriti **stabilnu granu po verziji** da se razgovori ne prepisuju.
+- [ ] Deploy odabrane verzije (Streamlit Cloud za A, VPS upute gotove za B).
 
-Ranije je postojao **drugi dizajn izlaza** (bio na sada obrisanoj grani
-`streamlit`) koji NIJE u trenutnom kodu, ali ga je korisnik želio:
+## 6. Konvencije rada
 
-- **A4 landscape, 2–3 stupca** (default 3), gusto za tisak s minimalnim marginama
-- **Bez naslova i labela sekcija** — samo tekst; **refren (Chorus) uvučen + bold/italic**
-- Pjesme odvojene **linijom razdjelnika** (`____`)
-- **Automatsko uklanjanje redova s akordima** (hrv./njem. notacija: D, A, Fis,
-  H, Cis, Es, Am, G/B, Dsus4, Am7…) — red je "akordni" ako su svi tokeni akordi
-- Bio deployan kao **Streamlit** app (`share.streamlit.io`, grana `streamlit`)
-
-Ako korisnik traži "stupce / landscape / bez naslova / makni akorde", misli na
-OVAJ format. Trenutni Flask editor to (još) ne radi — to je moguć sljedeći korak:
-dodati u opcije izbor "način izgleda" (editor-portret vs. gusti landscape-stupci).
-
-## 9. Otvorena pitanja / mogući sljedeći koraci
-
-- [ ] Objediniti dva formata izlaza (portret-editor + landscape-stupci) kao opciju
-- [ ] Vratiti detekciju/uklanjanje akorda ako se koristi landscape format
-- [ ] Deploy: korisnik je razmatrao Streamlit Cloud i Hostinger VPS; VPS upute su gotove
-- [ ] Mobitel: korisnik želi pristup s mobitela (web app rješava; native .apk je odbačen kao nepraktičan)
-
-## 10. Konvencije rada
-
-- Sve promjene idu na granu `claude/zealous-bohr-YwV9B`, uz commit + push.
-- Generirani `.docx`/`.pdf` i `__pycache__` su u `.gitignore`.
+- Promjene na grani `claude/zealous-bohr-YwV9B`, commit + push (uz `--rebase`
+  pull jer druga strana push-a na istu granu).
+- `.gitignore`: `__pycache__`, `*.pyc`, (u nekim verzijama i `*.docx`/`*.pdf`).
 - Commit poruke na hrvatskom, opisne.
