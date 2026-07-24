@@ -14,33 +14,69 @@ from pathlib import Path
 
 import pdfplumber
 from docx import Document
-from docx.shared import Pt, Cm, RGBColor
+from docx.shared import Pt, Cm, RGBColor, Twips
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
 
 # ── Konstante za formatiranje ──────────────────────────────────────────────────
-FONT_NAME = "Calibri"
+FONT_NAME = "Liberation Serif"
 FONT_SIZE_TITLE = 26
-FONT_SIZE_NORMAL = 11
+FONT_SIZE_NORMAL = 9
 COLOR_BLACK = RGBColor(0, 0, 0)
+
+# Fontovi s punom podrškom za hrvatska slova (isti izbor kao original)
+# Liberation Serif ≈ Times New Roman | Liberation Sans ≈ Arial
+FONT_CHOICES = ["Liberation Serif", "Liberation Sans", "FreeSerif", "FreeSans"]
 
 # Zadani stil; web sučelje šalje vlastite vrijednosti
 STYLE_DEFAULTS = {
+    "layout": "kompaktno",       # "kompaktno" (stupci) ili "klasicno" (stranice)
     "font": FONT_NAME,
     "title_size": FONT_SIZE_TITLE,
     "body_size": FONT_SIZE_NORMAL,
-    "margin_cm": 2.5,
+    "margin_cm": 0.5,
     "page_break": True,
+    "n_cols": 3,
+    "strip_chords": True,
 }
 
 # Labele sekcija koje se ispisuju boldano
 SECTION_LABELS = re.compile(
-    r"^(Chorus|Verse\s*\d*|Bridge|Intro|Outro|Pre-?Chorus|Tag|"
-    r"V\d+(?:\s*\([^)]+\))?|C\d+|B\d*|BRIDGE|Verse|verse|chorus)\s*$",
+    r"^(Chorus\s*\d*|Verse\s*\d*|Bridge\s*\d*|Intro|Outro|Pre-?Chorus|Tag|"
+    r"V\d+(?:\s*\([^)]+\))?|C\d*|B\d*|BRIDGE|Verse|verse|chorus)\s*(\(.*\))?\s*$",
     re.IGNORECASE,
 )
+
+# Sekcije koje se u kompaktnom izgledu tretiraju kao REFREN (uvučen, bold+kurziv)
+CHORUS_TYPES = re.compile(
+    r"^(Chorus\s*\d*|C\d*|Bridge\s*\d*|B\d*|BRIDGE|Pre-?Chorus|Tag|Outro)\s*(\(.*\))?$",
+    re.IGNORECASE,
+)
+
+# Crta razdjelnica između pjesama u kompaktnom izgledu
+DIVIDER = "_" * 35
+
+# Regex za jedan akord (hrvatska/njemačka notacija)
+# Primjeri: D, A, Fis, H, Cis, Es, Dm, Am7, G/B, Dsus4, Hm, Bb
+_CHORD_TOKEN = re.compile(
+    r"^[CDEFGAHB]"          # osnovna nota
+    r"(is|es|s|#|b)?"       # povisilica/snizilica (Fis, Es, As, C#, Bb)
+    r"(m|mol|maj|min|dim|aug|sus|add)?"  # kvaliteta
+    r"\d*"                  # broj (7, 9, 11...)
+    r"(sus\d*|add\d*)?"     # sus/add sufiks
+    r"(/[CDEFGAHB](IS|ES|is|es|#|b)?)?$",  # slash akord
+    re.IGNORECASE,
+)
+
+
+def is_chord_line(line: str) -> bool:
+    """Vraća True ako linija sadrži samo akorde (bez normalnih riječi)."""
+    tokens = line.split()
+    if not tokens:
+        return False
+    return all(bool(_CHORD_TOKEN.match(t)) and len(t) <= 7 for t in tokens)
 
 
 def _style(style=None):
@@ -400,6 +436,79 @@ def build_docx(songs, style=None):
             add_empty_line(doc, st)
             add_empty_line(doc, st)
         write_song(doc, song, add_page_break=add_break, style=st)
+    return doc
+
+
+# ── Kompaktni izgled (A4 ležeće, stupci, bez naslova — original konverter) ────
+
+CHORUS_INDENT = Twips(720)
+
+
+def set_columns(doc, n_cols, margin_cm=0.5):
+    """A4 ležeće s n_cols stupaca i minimalnim marginama."""
+    section = doc.sections[0]
+    section.page_width = Cm(29.7)
+    section.page_height = Cm(21.0)
+    section.left_margin = Cm(margin_cm)
+    section.right_margin = Cm(margin_cm)
+    section.top_margin = Cm(margin_cm)
+    section.bottom_margin = Cm(margin_cm)
+
+    sectPr = section._sectPr
+    cols = OxmlElement("w:cols")
+    cols.set(qn("w:num"), str(n_cols))
+    cols.set(qn("w:space"), "720")
+    cols.set(qn("w:equalWidth"), "1")
+    sectPr.append(cols)
+
+
+def song_compact_blocks(song):
+    """Pjesma -> [(je_refren, linija), ...] za kompaktni ispis.
+
+    Naslov, tonalitet i Pjesmarica blok se izostavljaju; napomene i sekcije
+    bez labele idu kao kitica (normalno), Chorus/Bridge/Tag/Outro kao refren
+    (uvučeno, bold+kurziv). Prazni retci se preskaču.
+    """
+    out = []
+    for note in song.get("notes") or []:
+        if note:
+            out.append((False, note))
+    for label, lines in song.get("sections") or []:
+        chorus = bool(label and CHORUS_TYPES.match(label))
+        for line in lines:
+            if line:
+                out.append((chorus, line))
+    return out
+
+
+def build_docx_compact(songs, style=None):
+    """Kompaktni Word: A4 ležeće, stupci, crta između pjesama."""
+    st = _style(style)
+    doc = Document()
+
+    doc_style = doc.styles["Normal"]
+    doc_style.font.name = st["font"]
+    doc_style.font.size = Pt(st["body_size"])
+    pf = doc_style.paragraph_format
+    pf.space_before = Pt(0)
+    pf.space_after = Pt(0)
+
+    set_columns(doc, st["n_cols"], st["margin_cm"])
+
+    first = True
+    for song in songs:
+        if not first:
+            para = doc.add_paragraph()
+            set_paragraph_spacing(para, before=60, after=60)
+            add_run(para, DIVIDER, size=st["body_size"], font=st["font"])
+        first = False
+        for chorus, line in song_compact_blocks(song):
+            para = doc.add_paragraph()
+            set_paragraph_spacing(para, before=0, after=0)
+            if chorus:
+                para.paragraph_format.left_indent = CHORUS_INDENT
+            add_run(para, line, bold=chorus, italic=chorus,
+                    size=st["body_size"], font=st["font"])
     return doc
 
 

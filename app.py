@@ -18,13 +18,12 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 
-from pdf_to_word import SECTION_LABELS, build_docx, parse_pdf
-from pdf_writer import build_pdf
+from pdf_to_word import (FONT_CHOICES, SECTION_LABELS, build_docx,
+                         build_docx_compact, is_chord_line, parse_pdf)
+from pdf_writer import build_pdf, build_pdf_compact
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "50"))
 MAX_SONGS = 500
-
-FONTS = ("Calibri", "Arial", "Verdana", "Cambria", "Times New Roman", "Georgia")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
@@ -107,6 +106,25 @@ def editable_to_song(d):
     }
 
 
+def strip_chord_lines(song):
+    """Ukloni retke koji sadrže samo akorde (i sažmi nastale prazne retke)."""
+    def clean(lines):
+        out = []
+        for ln in lines:
+            if ln and is_chord_line(ln):
+                continue
+            if ln == "" and out and out[-1] == "":
+                continue
+            out.append(ln)
+        while out and out[-1] == "":
+            out.pop()
+        return out
+
+    song["notes"] = clean(song["notes"])
+    song["sections"] = [[lab, clean(ls)] for lab, ls in song["sections"]]
+    return song
+
+
 def parse_options(d):
     d = d or {}
 
@@ -117,12 +135,16 @@ def parse_options(d):
             return default
 
     font = d.get("font")
+    layout = d.get("layout")
     return {
-        "font": font if font in FONTS else "Calibri",
+        "layout": layout if layout in ("kompaktno", "klasicno") else "kompaktno",
+        "font": font if font in FONT_CHOICES else FONT_CHOICES[0],
         "title_size": clamp_num(d.get("title_size"), 12, 48, 26, int),
-        "body_size": clamp_num(d.get("body_size"), 7, 20, 11, int),
-        "margin_cm": clamp_num(d.get("margin_cm"), 0.5, 4.0, 2.5, float),
+        "body_size": clamp_num(d.get("body_size"), 7, 20, 9, int),
+        "margin_cm": clamp_num(d.get("margin_cm"), 0.3, 4.0, 0.5, float),
         "page_break": bool(d.get("page_break", True)),
+        "n_cols": clamp_num(d.get("n_cols"), 2, 3, 3, int),
+        "strip_chords": bool(d.get("strip_chords", True)),
     }
 
 
@@ -137,8 +159,10 @@ def export_payload():
     if len(raw_songs) > MAX_SONGS:
         return None, None, None, (
             jsonify(error=f"Previše pjesama (maksimum {MAX_SONGS})."), 400)
-    songs = [editable_to_song(s) for s in raw_songs]
     options = parse_options(data.get("options"))
+    songs = [editable_to_song(s) for s in raw_songs]
+    if options["strip_chords"]:
+        songs = [strip_chord_lines(s) for s in songs]
     stem = secure_filename(str(data.get("filename") or ""))[:80] or "pjesmarica"
     return songs, options, stem, None
 
@@ -191,7 +215,8 @@ def export_docx():
     if err:
         return err
     try:
-        doc = build_docx(songs, options)
+        builder = build_docx_compact if options["layout"] == "kompaktno" else build_docx
+        doc = builder(songs, options)
         buf = io.BytesIO()
         doc.save(buf)
         buf.seek(0)
@@ -210,7 +235,8 @@ def export_pdf():
     if err:
         return err
     try:
-        pdf_bytes = build_pdf(songs, options)
+        builder = build_pdf_compact if options["layout"] == "kompaktno" else build_pdf
+        pdf_bytes = builder(songs, options)
     except Exception as exc:
         app.logger.exception("PDF izvoz nije uspio")
         return jsonify(error=f"Izvoz nije uspio: {exc}"), 500
@@ -226,7 +252,7 @@ PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pjesme Print</title>
+<title>Pjesmarica konverter</title>
 <style>
   :root {
     --bg: #0e1116; --panel: #161b23; --panel2: #1c2330; --border: #29323f;
@@ -353,8 +379,8 @@ PAGE = r"""<!doctype html>
 </head>
 <body>
 <header>
-  <h1>Pjesme Print</h1>
-  <span class="sub">PDF pjesmarica → uredi → novi PDF ili Word</span>
+  <h1>🎵 Pjesmarica konverter</h1>
+  <span class="sub">Ubaci PDF → uredi → novi PDF ili Word</span>
   <span class="grow"></span>
   <button id="btnTheme" title="Svijetla/tamna tema">☀️</button>
 </header>
@@ -363,8 +389,9 @@ PAGE = r"""<!doctype html>
   <div id="viewUpload">
     <div class="upcard">
       <h2>Učitaj pjesmaricu</h2>
-      <p>Svaka stranica PDF-a = jedna pjesma. Nakon učitavanja možeš uređivati
-         tekst, redoslijed i odabir pjesama pa preuzeti novi PDF ili Word.</p>
+      <p>Svaka stranica PDF-a = jedna pjesma. Nakon učitavanja uređuješ tekst,
+         redoslijed i odabir pjesama pa preuzmeš novi PDF ili Word — kompaktno
+         u stupcima (kao za misu) ili klasično sa stranicom po pjesmi.</p>
       <div id="drop">
         <strong>Klikni</strong> ili dovuci PDF ovdje
         <input type="file" id="fileInput" accept=".pdf,application/pdf" hidden>
@@ -377,16 +404,30 @@ PAGE = r"""<!doctype html>
   <div id="viewEditor" class="hidden">
     <div class="optsbar">
       <button class="btn" id="btnBack">← Nova datoteka</button>
-      <label>Font
-        <select id="optFont">
-          <option>Calibri</option><option>Arial</option><option>Verdana</option>
-          <option>Cambria</option><option>Times New Roman</option><option>Georgia</option>
+      <label>Izgled
+        <select id="optLayout">
+          <option value="kompaktno">Kompaktno (stupci)</option>
+          <option value="klasicno">Klasično (stranica po pjesmi)</option>
         </select>
       </label>
-      <label>Naslov <input type="number" id="optTitle" min="12" max="48" value="26"></label>
-      <label>Tekst <input type="number" id="optBody" min="7" max="20" value="11"></label>
-      <label>Margina cm <input type="number" id="optMargin" min="0.5" max="4" step="0.5" value="2.5"></label>
-      <label><input type="checkbox" id="optBreak" checked> Pjesma = nova stranica</label>
+      <label>Font
+        <select id="optFont">
+          <option>Liberation Serif</option><option>Liberation Sans</option>
+          <option>FreeSerif</option><option>FreeSans</option>
+        </select>
+      </label>
+      <label>Tekst <input type="number" id="optBody" min="7" max="20" value="9"></label>
+      <label id="lblCols">Stupci
+        <select id="optCols"><option>2</option><option selected>3</option></select>
+      </label>
+      <label id="lblTitle" class="hidden">Naslov
+        <input type="number" id="optTitle" min="12" max="48" value="26"></label>
+      <label id="lblMargin" class="hidden">Margina cm
+        <input type="number" id="optMargin" min="0.3" max="4" step="0.1" value="0.5"></label>
+      <label id="lblBreak" class="hidden">
+        <input type="checkbox" id="optBreak" checked> Pjesma = nova stranica</label>
+      <label title="Retci koji sadrže samo akorde (D, Am7, Fis...) izostavljaju se iz dokumenta">
+        <input type="checkbox" id="optChords" checked> Ukloni akorde</label>
       <span class="grow"></span>
       <button class="btn primary" id="btnPdf">⬇ PDF</button>
       <button class="btn primary" id="btnDocx">⬇ Word</button>
@@ -411,9 +452,11 @@ PAGE = r"""<!doctype html>
             <textarea id="fPjesmarica" rows="2" placeholder="1 - 23"></textarea></label>
         </div>
         <label>Tekst pjesme <textarea id="fBody" spellcheck="false"></textarea></label>
-        <p class="hint">Labelu sekcije (Verse 1, Chorus, Bridge, Intro, Outro…)
-           napiši samu u retku — u dokumentu izlazi <b>boldana</b>.
-           Prazan redak = razmak među blokovima.</p>
+        <p class="hint">Labelu sekcije (Verse 1, Chorus, Bridge…) napiši samu u
+           retku. Kompaktni izgled: Chorus/Bridge/Tag/Outro izlaze <b>uvučeno,
+           podebljano i u kurzivu</b>, naslovi i tonaliteti se izostavljaju,
+           pjesme dijeli crta. Klasični izgled: svaka pjesma na svojoj stranici,
+           s naslovom i <b>boldanim</b> labelama.</p>
       </section>
     </div>
   </div>
@@ -585,14 +628,37 @@ $("btnBack").onclick = () => {
   }
 };
 
+/* Opcije izgleda */
+const LAYOUT_DEFAULTS = {
+  kompaktno: { body: 9, margin: 0.5 },
+  klasicno: { body: 11, margin: 2.5 },
+};
+function applyLayout() {
+  const compact = $("optLayout").value === "kompaktno";
+  $("lblCols").classList.toggle("hidden", !compact);
+  $("lblTitle").classList.toggle("hidden", compact);
+  $("lblMargin").classList.toggle("hidden", compact);
+  $("lblBreak").classList.toggle("hidden", compact);
+}
+$("optLayout").addEventListener("change", () => {
+  const d = LAYOUT_DEFAULTS[$("optLayout").value];
+  $("optBody").value = d.body;
+  $("optMargin").value = d.margin;
+  applyLayout();
+});
+applyLayout();
+
 /* Izvoz */
 function options() {
   return {
+    layout: $("optLayout").value,
     font: $("optFont").value,
     title_size: parseInt($("optTitle").value, 10) || 26,
-    body_size: parseInt($("optBody").value, 10) || 11,
-    margin_cm: parseFloat($("optMargin").value) || 2.5,
+    body_size: parseInt($("optBody").value, 10) || 9,
+    margin_cm: parseFloat($("optMargin").value) || 0.5,
     page_break: $("optBreak").checked,
+    n_cols: parseInt($("optCols").value, 10) || 3,
+    strip_chords: $("optChords").checked,
   };
 }
 async function doExport(kind) {

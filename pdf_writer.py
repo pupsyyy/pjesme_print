@@ -1,65 +1,102 @@
 #!/usr/bin/env python3
 """
-Izvoz pjesmarice u PDF (reportlab), istim rasporedom kao Word izvoz:
-naslov lijevo + tonalitet desno, boldane labele sekcija, stranica po pjesmi.
+PDF izvoz pjesmarice (reportlab), dva izgleda:
+  - kompaktni: A4 ležeće, 2-3 balansirana stupca, bez naslova, refren uvučen
+    bold+kurziv, crta između pjesama (original "Pjesmarica konverter")
+  - klasični: A4 uspravno, naslov + tonalitet desno, boldane labele sekcija,
+    stranica po pjesmi
 """
 
 import html
+import os
 from io import BytesIO
-from pathlib import Path
 
 from reportlab.lib.enums import TA_RIGHT
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import (PageBreak, Paragraph, SimpleDocTemplate,
-                                Spacer, Table, TableStyle)
+from reportlab.platypus import (BalancedColumns, PageBreak, Paragraph,
+                                SimpleDocTemplate, Spacer, Table, TableStyle)
 
-# Kandidati za TTF fontove (Docker slika instalira liberation + dejavu).
-# Ugrađeni TTF je nužan za ispravne hrvatske dijakritike u PDF-u.
-_FONT_CANDIDATES = {
-    "sans": [
-        ("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),
-        ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
-    ],
-    "serif": [
-        ("/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
-         "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf"),
-        ("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
-         "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"),
-    ],
+from pdf_to_word import CHORUS_TYPES, DIVIDER, FONT_CHOICES
+
+# Moguće lokacije fontova (Linux distribucije se razlikuju)
+_FONT_SEARCH_DIRS = [
+    "/usr/share/fonts/truetype/liberation/",
+    "/usr/share/fonts/liberation/",
+    "/usr/share/fonts/truetype/freefont/",
+    "/usr/share/fonts/freefont/",
+    "/usr/share/fonts/truetype/dejavu/",
+    "/usr/share/fonts/truetype/",
+    "/usr/share/fonts/",
+]
+
+# name -> datoteke za normal/bold/italic/boldItalic
+_FONT_FILES = {
+    "Liberation Serif": ("LiberationSerif-Regular.ttf", "LiberationSerif-Bold.ttf",
+                         "LiberationSerif-Italic.ttf", "LiberationSerif-BoldItalic.ttf"),
+    "Liberation Sans": ("LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf",
+                        "LiberationSans-Italic.ttf", "LiberationSans-BoldItalic.ttf"),
+    "FreeSerif": ("FreeSerif.ttf", "FreeSerifBold.ttf",
+                  "FreeSerifItalic.ttf", "FreeSerifBoldItalic.ttf"),
+    "FreeSans": ("FreeSans.ttf", "FreeSansBold.ttf",
+                 "FreeSansOblique.ttf", "FreeSansBoldOblique.ttf"),
+    # rezervni izbor ako Liberation/Free nisu instalirani
+    "DejaVu Serif": ("DejaVuSerif.ttf", "DejaVuSerif-Bold.ttf",
+                     "DejaVuSerif-Italic.ttf", "DejaVuSerif-BoldItalic.ttf"),
+    "DejaVu Sans": ("DejaVuSans.ttf", "DejaVuSans-Bold.ttf",
+                    "DejaVuSans-Oblique.ttf", "DejaVuSans-BoldOblique.ttf"),
 }
-
-# Fallback na standardne PDF fontove (bez punih dijakritika) ako TTF nema
-_FALLBACK = {"sans": ("Helvetica", "Helvetica-Bold"),
-             "serif": ("Times-Roman", "Times-Bold")}
-
-# Word font (iz opcija) -> obitelj za PDF
-_FAMILY_BY_FONT = {"Calibri": "sans", "Arial": "sans", "Verdana": "sans",
-                   "Cambria": "serif", "Times New Roman": "serif",
-                   "Georgia": "serif"}
 
 _registered = {}
 
 
-def _family_fonts(family):
-    """Vrati (regular, bold) ime registriranog fonta za obitelj."""
-    if family in _registered:
-        return _registered[family]
-    result = _FALLBACK[family]
-    for reg_path, bold_path in _FONT_CANDIDATES[family]:
-        if Path(reg_path).exists() and Path(bold_path).exists():
-            reg_name = f"Pjesme-{family}"
-            bold_name = f"Pjesme-{family}-Bold"
-            pdfmetrics.registerFont(TTFont(reg_name, reg_path))
-            pdfmetrics.registerFont(TTFont(bold_name, bold_path))
-            result = (reg_name, bold_name)
-            break
-    _registered[family] = result
+def _find_font_file(filename):
+    for d in _FONT_SEARCH_DIRS:
+        path = os.path.join(d, filename)
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _register(name):
+    """Registrira obitelj fontova; vraća bazno ime ili None ako nema datoteka."""
+    files = _FONT_FILES[name]
+    paths = [_find_font_file(f) for f in files]
+    if not all(paths):
+        return None
+    pdfmetrics.registerFont(TTFont(name, paths[0]))
+    pdfmetrics.registerFont(TTFont(name + "-Bold", paths[1]))
+    pdfmetrics.registerFont(TTFont(name + "-Italic", paths[2]))
+    pdfmetrics.registerFont(TTFont(name + "-BoldItalic", paths[3]))
+    pdfmetrics.registerFontFamily(name, normal=name, bold=name + "-Bold",
+                                  italic=name + "-Italic",
+                                  boldItalic=name + "-BoldItalic")
+    return name
+
+
+def ensure_font(name):
+    """Vrati (normal, bold, boldItalic) imena fontova, s fallbackom."""
+    if name in _registered:
+        return _registered[name]
+    result = None
+    if name in _FONT_FILES:
+        base = _register(name)
+        if base:
+            result = (base, base + "-Bold", base + "-BoldItalic")
+    if result is None:
+        # fallback: DejaVu iste "obitelji", pa standardni PDF fontovi
+        fallback = "DejaVu Serif" if "Serif" in name else "DejaVu Sans"
+        if fallback != name and _register(fallback):
+            result = (fallback, fallback + "-Bold", fallback + "-BoldItalic")
+        else:
+            std = ("Times-Roman", "Times-Bold", "Times-BoldItalic") \
+                if "Serif" in name else \
+                ("Helvetica", "Helvetica-Bold", "Helvetica-BoldOblique")
+            result = std
+    _registered[name] = result
     return result
 
 
@@ -67,10 +104,50 @@ def _esc(text):
     return html.escape(text)
 
 
+# ── Kompaktni izgled (original konverter) ─────────────────────────────────────
+
+def build_pdf_compact(songs, style):
+    """A4 ležeće, balansirani stupci, bez naslova; vraća bytes."""
+    from pdf_to_word import song_compact_blocks
+
+    font_reg, font_bold, font_bi = ensure_font(style["font"])
+    size = style["body_size"]
+    margin = style["margin_cm"] * cm
+    col_gap = 1.0 * cm
+
+    st_verse = ParagraphStyle("verse", fontName=font_reg, fontSize=size,
+                              leading=size * 1.2)
+    st_chorus = ParagraphStyle("chorus", fontName=font_bi, fontSize=size,
+                               leading=size * 1.2, leftIndent=18)
+    st_divider = ParagraphStyle("divider", fontName=font_reg, fontSize=size,
+                                leading=size * 1.4, spaceBefore=2, spaceAfter=2)
+
+    story = []
+    first = True
+    for song in songs:
+        if not first:
+            story.append(Paragraph(DIVIDER, st_divider))
+        first = False
+        for chorus, line in song_compact_blocks(song):
+            story.append(Paragraph(_esc(line), st_chorus if chorus else st_verse))
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(A4), leftMargin=margin, rightMargin=margin,
+        topMargin=margin, bottomMargin=margin,
+        title="Pjesmarica", author="Pjesmarica konverter")
+    cols = BalancedColumns(
+        story, nCols=style["n_cols"], needed=1 * cm,
+        spaceBefore=0, spaceAfter=0, leftPadding=0, rightPadding=col_gap / 2)
+    doc.build([cols])
+    return buf.getvalue()
+
+
+# ── Klasični izgled (naslov + tonalitet, stranica po pjesmi) ──────────────────
+
 def build_pdf(songs, style):
-    """Složi PDF iz liste pjesama; vraća bytes."""
-    family = _FAMILY_BY_FONT.get(style["font"], "sans")
-    font_reg, font_bold = _family_fonts(family)
+    """A4 uspravno s naslovima; vraća bytes."""
+    font_reg, font_bold, _bi = ensure_font(style["font"])
 
     title_size = style["title_size"]
     body_size = style["body_size"]
@@ -93,7 +170,7 @@ def build_pdf(songs, style):
     doc = SimpleDocTemplate(
         buf, pagesize=A4, leftMargin=margin, rightMargin=margin,
         topMargin=margin, bottomMargin=margin,
-        title="Pjesmarica", author="Pjesme Print")
+        title="Pjesmarica", author="Pjesmarica konverter")
 
     def blank():
         return Spacer(1, line_h)
