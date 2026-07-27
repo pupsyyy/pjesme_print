@@ -138,6 +138,7 @@ def parse_options(d):
 
     font = d.get("font")
     layout = d.get("layout")
+    wm_level = d.get("watermark_level")
     return {
         "layout": layout if layout in ("kompaktno", "klasicno") else "kompaktno",
         "font": font if font in FONT_CHOICES else FONT_CHOICES[0],
@@ -147,6 +148,9 @@ def parse_options(d):
         "page_break": bool(d.get("page_break", True)),
         "n_cols": clamp_num(d.get("n_cols"), 2, 3, 3, int),
         "strip_chords": bool(d.get("strip_chords", True)),
+        "watermark": bool(d.get("watermark", False)),
+        "watermark_level": wm_level if wm_level in ("vrlo_blijedo", "srednje")
+                           else "vrlo_blijedo",
     }
 
 
@@ -513,6 +517,14 @@ PAGE = r"""<!doctype html>
         <input type="checkbox" id="optBreak" checked> Pjesma = nova stranica</label>
       <label title="Retci koji sadrže samo akorde (D, Am7, Fis...) izostavljaju se iz dokumenta">
         <input type="checkbox" id="optChords" checked> Ukloni akorde</label>
+      <label title="Papa Band logo kao blijedi vodeni žig iza teksta">
+        <input type="checkbox" id="optWm"> Logo u pozadini</label>
+      <label id="lblWmLevel" class="hidden">Žig
+        <select id="optWmLevel">
+          <option value="vrlo_blijedo">vrlo blijedo</option>
+          <option value="srednje">srednje</option>
+        </select>
+      </label>
       <span class="grow"></span>
       <button class="btn primary" id="btnPdf">⬇ PDF</button>
       <button class="btn primary" id="btnDocx">⬇ Word</button>
@@ -737,6 +749,11 @@ $("optLayout").addEventListener("change", () => {
 });
 applyLayout();
 
+/* Vodeni žig: pokaži izbor jačine samo kad je uključen */
+function applyWm() { $("lblWmLevel").classList.toggle("hidden", !$("optWm").checked); }
+$("optWm").addEventListener("change", applyWm);
+applyWm();
+
 /* Izvoz */
 function options() {
   return {
@@ -748,6 +765,8 @@ function options() {
     page_break: $("optBreak").checked,
     n_cols: parseInt($("optCols").value, 10) || 3,
     strip_chords: $("optChords").checked,
+    watermark: $("optWm").checked,
+    watermark_level: $("optWmLevel").value,
   };
 }
 async function doExport(kind) {

@@ -40,6 +40,8 @@ STYLE_DEFAULTS = {
     "page_break": True,
     "n_cols": 3,
     "strip_chords": True,
+    "watermark": False,
+    "watermark_level": "vrlo_blijedo",
 }
 
 # Labele sekcija koje se ispisuju boldano
@@ -426,6 +428,17 @@ def setup_document(style=None):
     return doc
 
 
+def _maybe_watermark(doc, st, width_frac):
+    """Dodaj vodeni žig ako je uključen u opcijama (tiho preskoči na grešci)."""
+    if not st.get("watermark"):
+        return
+    try:
+        from watermark import add_word_watermark
+        add_word_watermark(doc, st.get("watermark_level"), width_frac)
+    except Exception:
+        pass
+
+
 def build_docx(songs, style=None):
     """Složi Word dokument iz liste pjesama; vraća Document objekt."""
     st = _style(style)
@@ -436,6 +449,7 @@ def build_docx(songs, style=None):
             add_empty_line(doc, st)
             add_empty_line(doc, st)
         write_song(doc, song, add_page_break=add_break, style=st)
+    _maybe_watermark(doc, st, width_frac=0.58)
     return doc
 
 
@@ -513,6 +527,7 @@ def build_docx_compact(songs, style=None):
                 para.paragraph_format.left_indent = CHORUS_INDENT
             add_run(para, line, bold=chorus, italic=chorus,
                     size=st["body_size"], font=st["font"])
+    _maybe_watermark(doc, st, width_frac=0.42)
     return doc
 
 

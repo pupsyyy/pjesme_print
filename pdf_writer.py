@@ -15,12 +15,35 @@ from reportlab.lib.enums import TA_RIGHT
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (BalancedColumns, PageBreak, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
 from pdf_to_word import CHORUS_TYPES, DIVIDER, FONT_CHOICES
+from watermark import faded_logo_png, normalize_level
+
+
+def _watermark_drawer(style, page_w, page_h, width_frac):
+    """Vrati onPage funkciju koja crta logo centrirano iza teksta, ili None."""
+    if not style.get("watermark"):
+        return None
+    png = faded_logo_png(normalize_level(style.get("watermark_level")))
+    reader = ImageReader(BytesIO(png))
+    iw, ih = reader.getSize()
+    w = page_w * width_frac
+    h = w * ih / iw
+    x = (page_w - w) / 2
+    y = (page_h - h) / 2
+
+    def draw(canvas, _doc):
+        canvas.saveState()
+        canvas.drawImage(reader, x, y, w, h, mask="auto",
+                         preserveAspectRatio=True)
+        canvas.restoreState()
+
+    return draw
 
 # Moguće lokacije fontova (Linux distribucije se razlikuju)
 _FONT_SEARCH_DIRS = [
@@ -132,6 +155,7 @@ def build_pdf_compact(songs, style):
             story.append(Paragraph(_esc(line), st_chorus if chorus else st_verse))
 
     buf = BytesIO()
+    page_w, page_h = landscape(A4)
     doc = SimpleDocTemplate(
         buf, pagesize=landscape(A4), leftMargin=margin, rightMargin=margin,
         topMargin=margin, bottomMargin=margin,
@@ -139,7 +163,8 @@ def build_pdf_compact(songs, style):
     cols = BalancedColumns(
         story, nCols=style["n_cols"], needed=1 * cm,
         spaceBefore=0, spaceAfter=0, leftPadding=0, rightPadding=col_gap / 2)
-    doc.build([cols])
+    wm = _watermark_drawer(style, page_w, page_h, width_frac=0.42)
+    doc.build([cols], onFirstPage=wm, onLaterPages=wm) if wm else doc.build([cols])
     return buf.getvalue()
 
 
@@ -174,6 +199,8 @@ def build_pdf(songs, style):
 
     def blank():
         return Spacer(1, line_h)
+
+    wm = _watermark_drawer(style, A4[0], A4[1], width_frac=0.58)
 
     story = []
     for idx, song in enumerate(songs):
@@ -229,5 +256,5 @@ def build_pdf(songs, style):
                 else:
                     story.append(Paragraph(_esc(line), st_body))
 
-    doc.build(story)
+    doc.build(story, onFirstPage=wm, onLaterPages=wm) if wm else doc.build(story)
     return buf.getvalue()
