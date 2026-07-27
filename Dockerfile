@@ -14,7 +14,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY pdf_to_word.py pdf_writer.py app.py ./
+COPY pdf_to_word.py pdf_writer.py watermark.py app.py ./
+COPY assets/ ./assets/
 
 EXPOSE 8000
 

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="1150" viewBox="0 0 1900 1150">
+  <g fill="none" stroke="#141413" stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
+    <!-- kapa: mali vrh (button) + dome -->
+    <path d="M322 250 C 310 274, 316 294, 338 302"/>
+    <path d="M338 302 C 196 360, 116 486, 132 566"/>
+    <!-- šilt (brim) prema lijevo -->
+    <path d="M132 566 C 74 592, 70 642, 132 654 C 300 648, 500 620, 612 560"/>
+    <!-- stražnja strana glave (desno) niz čeljust -->
+    <path d="M612 560 C 716 642, 754 858, 724 1012
+             C 706 1104, 660 1170, 604 1210"/>
+    <!-- čeljust -> brada (naprijed, lijevo) -->
+    <path d="M604 1210 C 548 1258, 452 1264, 392 1220"/>
+    <!-- brada -> usta -> nos (šiljak lijevo) -> čelo pod šiltom -->
+    <path d="M392 1220 C 470 1210, 520 1150, 512 1086
+             C 508 1052, 470 1044, 440 1058
+             C 420 1024, 388 1006, 352 1010
+             C 402 970, 430 900, 430 812
+             C 430 726, 470 662, 560 618"/>
+  </g>
+  <g fill="#141413" font-family="Poppins, Arial, sans-serif" font-weight="500" font-size="290" letter-spacing="10">
+    <text x="880" y="640">PAPA</text>
+    <text x="880" y="1000">BAND</text>
+  </g>
+</svg>
