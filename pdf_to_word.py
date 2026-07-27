@@ -433,8 +433,10 @@ def _maybe_watermark(doc, st, width_frac):
     if not st.get("watermark"):
         return
     try:
-        from watermark import add_word_watermark
-        add_word_watermark(doc, st.get("watermark_level"), width_frac)
+        from watermark import add_word_watermark, faded_logo_png, normalize_level
+        png = st.get("watermark_png") or \
+            faded_logo_png(normalize_level(st.get("watermark_level")))
+        add_word_watermark(doc, png, width_frac)
     except Exception:
         pass
 

@@ -25,11 +25,19 @@ from pdf_to_word import CHORUS_TYPES, DIVIDER, FONT_CHOICES
 from watermark import faded_logo_png, normalize_level
 
 
-def _watermark_drawer(style, page_w, page_h, width_frac):
-    """Vrati onPage funkciju koja crta logo centrirano iza teksta, ili None."""
+def _watermark_bytes(style):
+    """PNG bajtovi žiga: precomputani (korisnički logo) ili ugrađeni logo."""
     if not style.get("watermark"):
         return None
-    png = faded_logo_png(normalize_level(style.get("watermark_level")))
+    return style.get("watermark_png") or \
+        faded_logo_png(normalize_level(style.get("watermark_level")))
+
+
+def _watermark_drawer(style, page_w, page_h, width_frac):
+    """Vrati onPage funkciju koja crta logo centrirano iza teksta, ili None."""
+    png = _watermark_bytes(style)
+    if not png:
+        return None
     reader = ImageReader(BytesIO(png))
     iw, ih = reader.getSize()
     w = page_w * width_frac

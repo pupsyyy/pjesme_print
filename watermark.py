@@ -28,17 +28,46 @@ def normalize_level(level):
     return level if level in LEVELS else DEFAULT_LEVEL
 
 
-@lru_cache(maxsize=4)
-def faded_logo_png(level: str) -> bytes:
-    """Vrati PNG (bytes) blijede sive verzije logotipa za zadanu razinu."""
+def _fade(alpha, level):
+    """Od alpha kanala napravi blijedu sivu RGBA sliku zadane jačine (PNG bytes)."""
     gray, factor = LEVELS[normalize_level(level)]
-    im = Image.open(LOGO_PATH).convert("RGBA")
-    alpha = im.getchannel("A").point(lambda v: int(v * factor))
-    out = Image.new("RGBA", im.size, gray + (0,))
-    out.putalpha(alpha)
+    faded = alpha.point(lambda v: int(v * factor))
+    out = Image.new("RGBA", alpha.size, gray + (0,))
+    out.putalpha(faded)
     buf = io.BytesIO()
     out.save(buf, format="PNG")
     return buf.getvalue()
+
+
+@lru_cache(maxsize=4)
+def faded_logo_png(level: str) -> bytes:
+    """Blijedi žig iz ugrađenog (prozirnog) logotipa — koristi njegov alpha."""
+    im = Image.open(LOGO_PATH).convert("RGBA")
+    return _fade(im.getchannel("A"), level)
+
+
+# Maksimalna dimenzija korisničkog logotipa (zaštita)
+MAX_LOGO_PX = 4000
+
+
+def faded_png_from_bytes(image_bytes: bytes, level: str) -> bytes:
+    """Blijedi žig iz proizvoljne slike; bijela pozadina postaje prozirna.
+
+    Alpha se računa iz svjetline (crno = puno, bijelo = ništa), pa se linijska
+    grafika na bijeloj podlozi automatski očisti od pozadine, s mekim rubovima.
+    Ako slika već ima prozirnost, ona se poštuje (množi s dobivenom alfom).
+    """
+    im = Image.open(io.BytesIO(image_bytes))
+    im.thumbnail((MAX_LOGO_PX, MAX_LOGO_PX))
+    im = im.convert("RGBA")
+    lum = im.convert("L")                       # svjetlina
+    from_white = lum.point(lambda v: 255 - v)   # bijelo->0, crno->255
+    orig_a = im.getchannel("A")
+    # kombiniraj s postojećom prozirnošću (min)
+    combined = Image.new("L", im.size)
+    combined.putdata([min(a, b) for a, b in zip(from_white.getdata(),
+                                                orig_a.getdata())])
+    return _fade(combined, level)
 
 
 @lru_cache(maxsize=1)
@@ -48,18 +77,18 @@ def logo_size():
         return im.size
 
 
-def add_word_watermark(doc, level, width_frac):
-    """Dodaj logo kao centrirani vodeni žig iza teksta (VML u zaglavlju).
+def add_word_watermark(doc, png, width_frac):
+    """Dodaj gotovi (blijedi) PNG kao centrirani vodeni žig iza teksta.
 
-    Isti mehanizam koji Word koristi za slikovni watermark — pojavljuje se
-    iza teksta na svakoj stranici.
+    Isti mehanizam koji Word koristi za slikovni watermark (VML u zaglavlju) —
+    pojavljuje se iza teksta na svakoj stranici.
     """
     from docx.oxml import parse_xml
     from docx.oxml.ns import nsdecls
     from docx.opc.constants import RELATIONSHIP_TYPE as RT
 
-    png = faded_logo_png(normalize_level(level))
-    iw, ih = logo_size()
+    with Image.open(BytesIO(png)) as _im:
+        iw, ih = _im.size
 
     section = doc.sections[0]
     w_pt = section.page_width.pt * width_frac
