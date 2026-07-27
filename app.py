@@ -10,6 +10,7 @@ Produkcija (gunicorn):
     gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 300 app:app
 """
 
+import base64
 import io
 import os
 import re
@@ -19,6 +20,8 @@ from pathlib import Path
 import pdfplumber
 from flask import Flask, jsonify, request, send_file
 from werkzeug.utils import secure_filename
+
+from watermark import faded_png_from_bytes
 
 from pdf_to_word import (FONT_CHOICES, SECTION_LABELS, build_docx,
                          build_docx_compact, is_chord_line, parse_pdf)
@@ -166,11 +169,33 @@ def export_payload():
         return None, None, None, (
             jsonify(error=f"Previše pjesama (maksimum {MAX_SONGS})."), 400)
     options = parse_options(data.get("options"))
+    if options["watermark"]:
+        raw = _decode_logo(data.get("logo"))
+        if raw:
+            try:
+                options["watermark_png"] = faded_png_from_bytes(
+                    raw, options["watermark_level"])
+            except Exception:
+                app.logger.exception("Obrada korisničkog logotipa nije uspjela")
+                # padne natrag na ugrađeni Papa Band logo
     songs = [editable_to_song(s) for s in raw_songs]
     if options["strip_chords"]:
         songs = [strip_chord_lines(s) for s in songs]
     stem = secure_filename(str(data.get("filename") or ""))[:80] or "pjesmarica"
     return songs, options, stem, None
+
+
+def _decode_logo(data_url):
+    """Dekodiraj 'data:image/...;base64,...' u bajtove (uz zaštitu veličine)."""
+    if not isinstance(data_url, str) or "base64," not in data_url:
+        return None
+    b64 = data_url.split("base64,", 1)[1]
+    if len(b64) > 8_000_000:  # ~6 MB slike je više nego dovoljno
+        return None
+    try:
+        return base64.b64decode(b64)
+    except Exception:
+        return None
 
 
 # ── Rute ──────────────────────────────────────────────────────────────────────
@@ -525,6 +550,12 @@ PAGE = r"""<!doctype html>
           <option value="srednje">srednje</option>
         </select>
       </label>
+      <span id="lblLogo" class="hidden">
+        <button type="button" class="btn" id="btnLogo"
+                style="padding:.35rem .7rem">Postavi logo…</button>
+        <span id="logoStatus" style="font-size:.8rem;color:var(--muted)"></span>
+        <input type="file" id="logoInput" accept="image/png,image/jpeg,image/*" hidden>
+      </span>
       <span class="grow"></span>
       <button class="btn primary" id="btnPdf">⬇ PDF</button>
       <button class="btn primary" id="btnDocx">⬇ Word</button>
@@ -749,10 +780,42 @@ $("optLayout").addEventListener("change", () => {
 });
 applyLayout();
 
-/* Vodeni žig: pokaži izbor jačine samo kad je uključen */
-function applyWm() { $("lblWmLevel").classList.toggle("hidden", !$("optWm").checked); }
+/* Vodeni žig: pokaži izbor jačine i logo tek kad je uključen */
+function applyWm() {
+  const on = $("optWm").checked;
+  $("lblWmLevel").classList.toggle("hidden", !on);
+  $("lblLogo").classList.toggle("hidden", !on);
+}
 $("optWm").addEventListener("change", applyWm);
 applyWm();
+
+/* Korisnički logo — spremljen u pregledniku (localStorage), pamti se po uređaju */
+const LOGO_KEY = "pjesme-logo";
+function refreshLogoStatus() {
+  const has = !!localStorage.getItem(LOGO_KEY);
+  $("logoStatus").innerHTML = has
+    ? 'tvoj logo ✓ <a href="#" id="logoClear" style="color:var(--accent)">ukloni</a>'
+    : '<span title="Bez logotipa koristi se ugrađeni Papa Band">ugrađeni logo</span>';
+  if (has) $("logoClear").onclick = e => {
+    e.preventDefault(); localStorage.removeItem(LOGO_KEY); refreshLogoStatus();
+    toast("Logo uklonjen — koristi se ugrađeni.");
+  };
+}
+$("btnLogo").onclick = () => $("logoInput").click();
+$("logoInput").onchange = () => {
+  const f = $("logoInput").files[0];
+  if (!f) return;
+  if (f.size > 5 * 1024 * 1024) { toast("Logo je prevelik (maks. 5 MB).", true); return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    try { localStorage.setItem(LOGO_KEY, reader.result); refreshLogoStatus();
+          toast("Logo spremljen — koristit će se kao vodeni žig."); }
+    catch (_e) { toast("Ne mogu spremiti logo (premalo mjesta u pregledniku).", true); }
+  };
+  reader.readAsDataURL(f);
+  $("logoInput").value = "";
+};
+refreshLogoStatus();
 
 /* Izvoz */
 function options() {
@@ -776,10 +839,13 @@ async function doExport(kind) {
   if (!songs.length) { toast("Nijedna pjesma nije uključena (kvačice).", true); return; }
   busy(kind === "pdf" ? "Pripremam PDF…" : "Pripremam Word…");
   try {
+    const opts = options();
+    const logo = opts.watermark ? localStorage.getItem(LOGO_KEY) : null;
     const res = await fetch("export/" + kind, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: state.filename, options: options(), songs }),
+      body: JSON.stringify({ filename: state.filename, options: opts, songs,
+                             logo: logo || undefined }),
     });
     if (!res.ok) {
       let msg = "Greška " + res.status;
