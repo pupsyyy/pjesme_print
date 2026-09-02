@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Testovi (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Fontovi za PDF (isti kao u Dockeru)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-liberation fonts-freefont-ttf fonts-dejavu-core
+      - name: Ovisnosti
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: pytest
+        run: pytest -q
+
+  docker:
+    name: Docker slika se builda i pokreće
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t pjesme-print:ci .
+      - name: Pokreni i provjeri /health
+        run: |
+          docker run -d --name pj -p 8000:8000 pjesme-print:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          python3 -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health')); assert d['status']=='ok', d; print(d)"
+          docker rm -f pj

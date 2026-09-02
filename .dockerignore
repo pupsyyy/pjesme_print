@@ -1,10 +1,14 @@
 .git
+.github
 .gitignore
+.pytest_cache
 __pycache__
 *.pyc
 venv
 *.docx
 *.pdf
 deploy
+tests
 DEPLOY.md
 README.md
+requirements-dev.txt

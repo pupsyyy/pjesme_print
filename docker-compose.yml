@@ -12,3 +12,9 @@ services:
       # - "8010:8000"
     environment:
       - MAX_UPLOAD_MB=50
+    # Rotacija logova: da datoteka logova ne raste beskonačno (3 x 10 MB)
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

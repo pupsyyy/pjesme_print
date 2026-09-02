@@ -1,8 +1,9 @@
 # Deployment na Hostinger VPS
 
-Upute za postavljanje aplikacije **Pjesme Print** (PDF pjesmarica → Word) na
-Hostinger VPS. Nakon postavljanja aplikacija je dostupna kroz web preglednik:
-uploadaš PDF, dobiješ `.docx`.
+Upute za postavljanje aplikacije **Pjesmarica konverter** (PDF pjesmarica →
+uredi → novi PDF ili Word) na Hostinger VPS. Nakon postavljanja aplikacija je
+dostupna kroz web preglednik — i s mobitela, gdje se može dodati na početni
+zaslon kao aplikacija.
 
 Dovoljan je i najmanji Hostinger plan (KVM 1). Preporučeni OS: **Ubuntu 24.04**
 (ili 22.04).
@@ -67,6 +68,7 @@ Izvana je dostupna kroz reverse proxy na putanji domene, npr.
 ### Korisne naredbe
 
 ```bash
+docker compose ps               # stanje — mora pisati "Up (healthy)"
 docker compose logs -f          # logovi uživo
 docker compose restart          # restart
 docker compose down             # zaustavi
@@ -173,6 +175,33 @@ caddy validate --config /etc/caddy/Caddyfile
 systemctl reload caddy
 ```
 
+### Caddy: vlastita poddomena (print.josip.cloud) — preporučeno
+
+Blok za poddomenu drži se u **zasebnoj datoteci** koju glavni Caddyfile samo
+uvozi — tako ga tuđe izmjene glavne datoteke ne mogu obrisati (što se već
+jednom dogodilo). Gotov predložak s uputama: **`deploy/print.caddy`**.
+
+```bash
+cp /opt/pjesme_print/deploy/print.caddy /etc/caddy/print.caddy
+echo 'import /etc/caddy/print.caddy' >> /etc/caddy/Caddyfile
+caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy
+```
+
+Ako u glavnom Caddyfileu već postoji stari `print.josip.cloud { … }` blok,
+obriši ga — smije postojati samo jedan. DNS: A zapis `print → IP servera`;
+Caddy sam izdaje i obnavlja HTTPS certifikat.
+
+**Lozinka za aplikaciju** (inače je javna svakome tko zna adresu):
+
+```bash
+caddy hash-password          # upiši lozinku; kopiraj ispisani hash ($2a$...)
+nano /etc/caddy/print.caddy  # odkomentiraj basic_auth blok i zalijepi hash
+caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy
+```
+
+Preglednik pita korisničko ime (`josip`) i lozinku jednom po uređaju;
+`/health` ostaje bez lozinke radi nadzora (npr. UptimeRobot).
+
 ### Nginx: putanja ili portal s loginom
 
 Za nginx je gotov `location /pjesme/` primjer u komentaru na dnu
@@ -211,3 +240,12 @@ ufw enable
   je postavljen na 300 s u gunicornu i nginxu. Po potrebi povećaj oboje.
 - **Logovi** — Docker: `docker compose logs -f`;
   systemd: `journalctl -u pjesme -f`.
+- **Poddomena javlja „ne može uspostaviti sigurnu vezu"** — Caddy nema blok
+  za nju: provjeri da `/etc/caddy/Caddyfile` sadrži
+  `import /etc/caddy/print.caddy`, da `dig +short print.josip.cloud` vraća IP
+  servera, pa pogledaj `journalctl -u caddy -n 30`.
+- **Vidi se stara verzija nakon deploya** — na početnom zaslonu (i na
+  `/health`) piše verzija; ako nije nova, deploy nije prošao:
+  `docker compose ps` (mora biti *Up (healthy)*) i `docker compose logs`.
+- **`docker compose ps` pokazuje *unhealthy*** — aplikacija ne odgovara na
+  `/health`: `docker compose logs`, pa `docker compose restart`.
