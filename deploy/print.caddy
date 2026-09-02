@@ -1,0 +1,26 @@
+# Pjesmarica konverter — zaseban Caddy site blok za poddomenu print.josip.cloud
+#
+# ZAŠTO ZASEBNA DATOTEKA: glavni /etc/caddy/Caddyfile uređuju i druge
+# aplikacije/sesije; kad ga netko prepiše, ovaj blok je jednom već nestao.
+# U zasebnoj datoteci preživi, a u glavnom Caddyfileu treba samo jedan redak.
+#
+# POSTAVLJANJE (na serveru):
+#   1. cp /opt/pjesme_print/deploy/print.caddy /etc/caddy/print.caddy
+#   2. u /etc/caddy/Caddyfile (na kraj) dodaj redak:
+#          import /etc/caddy/print.caddy
+#      i obriši eventualni stari "print.josip.cloud { ... }" blok iz glavne datoteke
+#   3. caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy
+#
+# LOZINKA (preporučeno — aplikacija je inače javna svakome tko zna adresu):
+#   caddy hash-password          (upiši željenu lozinku, ispiše hash koji počinje s $2a$)
+#   pa odkomentiraj tri retka basic_auth bloka dolje i zalijepi hash umjesto <HASH>.
+#   /health ostaje bez lozinke (za nadzor izvana, npr. UptimeRobot).
+#   Napomena: u Caddyju starijem od 2.8 direktiva se zove "basicauth".
+
+print.josip.cloud {
+    # @protected not path /health
+    # basic_auth @protected {
+    #     josip <HASH>
+    # }
+    reverse_proxy 127.0.0.1:8010
+}

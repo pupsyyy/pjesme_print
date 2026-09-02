@@ -17,18 +17,31 @@ import re
 import tempfile
 from pathlib import Path
 
-import pdfplumber
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, make_response, request, send_file
 from werkzeug.utils import secure_filename
 
 from watermark import faded_png_from_bytes
 
 from pdf_to_word import (FONT_CHOICES, SECTION_LABELS, build_docx,
-                         build_docx_compact, is_chord_line, parse_pdf)
+                         build_docx_compact, is_chord_line, parse_pdf_detailed)
 from pdf_writer import build_pdf, build_pdf_compact
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "50"))
 MAX_SONGS = 500
+
+
+def _read_version():
+    """Verzija iz APP_VERSION env varijable ili datoteke VERSION uz kod."""
+    env = os.environ.get("APP_VERSION")
+    if env:
+        return env.strip()
+    try:
+        return Path(__file__).with_name("VERSION").read_text().strip() or "dev"
+    except OSError:
+        return "dev"
+
+
+APP_VERSION = _read_version()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
@@ -159,9 +172,13 @@ def parse_options(d):
 
 def export_payload():
     data = request.get_json(silent=True)
-    if not data:
+    if not isinstance(data, dict):
         return None, None, None, (jsonify(error="Neispravan zahtjev."), 400)
     raw_songs = data.get("songs") or []
+    if not isinstance(raw_songs, list) or \
+            not all(isinstance(s, dict) for s in raw_songs):
+        return None, None, None, (
+            jsonify(error="Neispravan popis pjesama u zahtjevu."), 400)
     if not raw_songs:
         return None, None, None, (
             jsonify(error="Nijedna pjesma nije odabrana za izvoz."), 400)
@@ -202,12 +219,57 @@ def _decode_logo(data_url):
 
 @app.get("/")
 def index():
-    return PAGE.replace("__MAX_MB__", str(MAX_UPLOAD_MB))
+    html = (PAGE.replace("__MAX_MB__", str(MAX_UPLOAD_MB))
+                .replace("__VERSION__", APP_VERSION))
+    resp = make_response(html)
+    # bez keširanja: nakon deploya preglednik odmah dobije novu verziju
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": APP_VERSION}
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    """PWA manifest — relativne putanje rade i iza prefiksa (/print_pjesme/)."""
+    data = {
+        "name": "Pjesmarica konverter",
+        "short_name": "Pjesme",
+        "description": "PDF pjesmarica → uredi → novi PDF ili Word",
+        "start_url": "./",
+        "scope": "./",
+        "display": "standalone",
+        "background_color": "#141413",
+        "theme_color": "#d97757",
+        "lang": "hr",
+        "icons": [
+            {"src": "static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "static/icon-512.png", "sizes": "512x512", "type": "image/png"},
+            {"src": "static/icon-512-maskable.png", "sizes": "512x512",
+             "type": "image/png", "purpose": "maskable"},
+        ],
+    }
+    resp = jsonify(data)
+    resp.mimetype = "application/manifest+json"
+    return resp
+
+
+# Minimalni service worker: omogućuje "Dodaj na početni zaslon", NE kešira
+# ništa (da nova verzija nakon deploya odmah bude vidljiva).
+SW_JS = ("self.addEventListener('install',()=>self.skipWaiting());"
+         "self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));"
+         "self.addEventListener('fetch',()=>{});")
+
+
+@app.get("/sw.js")
+def service_worker():
+    resp = make_response(SW_JS)
+    resp.mimetype = "application/javascript"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 @app.errorhandler(413)
@@ -231,32 +293,51 @@ def parse():
         pdf_path = Path(tmpdir) / "ulaz.pdf"
         file.save(pdf_path)
         try:
-            songs = parse_pdf(str(pdf_path))
-            with pdfplumber.open(pdf_path) as pdf_doc:
-                n_landscape = sum(1 for p in pdf_doc.pages if p.width > p.height)
+            songs, stats = parse_pdf_detailed(str(pdf_path))
         except Exception as exc:
             app.logger.exception("Parsiranje nije uspjelo")
             return jsonify(error=f"Ne mogu pročitati PDF: {exc}"), 500
 
     if not songs:
+        if stats["text_pages"] == 0:
+            return jsonify(error=(
+                "PDF nema tekstualni sloj — vjerojatno je sken ili slika. "
+                "Treba PDF izvezen iz aplikacije s pjesmama (tekst koji se "
+                "može označiti), ne fotografija/sken.")), 422
         return jsonify(error="U PDF-u nije pronađena nijedna pjesma."), 422
 
+    warnings = []
     # Zaštita od konvertiranja već konvertiranog ispisa: takav ulaz ima
     # ležeće stranice i/ili crte razdjelnice kao tekst, a stupci se pri
     # čitanju pomiješaju u jedan red.
-    warnings = []
     all_lines = [ln for s in songs
                  for ln in (s["notes"] + [x for _l, ls in s["sections"] for x in ls])]
     has_divider = any(ln.strip().startswith("____") for ln in all_lines)
-    if n_landscape or has_divider:
+    if stats["landscape_pages"] or has_divider:
         warnings.append(
             "⚠ Ova datoteka izgleda kao VEĆ KONVERTIRANI ispis (ležeće "
             "stranice/crte između pjesama), a ne originalna pjesmarica. "
             "Stupci se pri čitanju pomiješaju — učitaj originalni PDF "
             "(uspravan, jedna pjesma po stranici).")
+    if stats["skipped"]:
+        warnings.append(_skipped_msg(stats["skipped"], stats["pages"]))
 
-    return jsonify(filename=stem, warnings=warnings,
+    return jsonify(filename=stem, warnings=warnings, pages=stats["pages"],
+                   skipped=stats["skipped"],
                    songs=[song_to_editable(s) for s in songs])
+
+
+def _skipped_msg(n, total):
+    """'Preskočena 1 stranica od 12', 'Preskočene 2 stranice…', 'Preskočeno 5 stranica…'."""
+    m10, m100 = n % 10, n % 100
+    if m10 == 1 and m100 != 11:
+        verb, noun = "Preskočena", "stranica"
+    elif 2 <= m10 <= 4 and not 12 <= m100 <= 14:
+        verb, noun = "Preskočene", "stranice"
+    else:
+        verb, noun = "Preskočeno", "stranica"
+    return (f"ℹ {verb} {n} {noun} od {total} — na njima nije prepoznata "
+            f"pjesma (nema naslova ili teksta). Provjeri nedostaje li koja.")
 
 
 @app.post("/export/docx")
@@ -306,6 +387,13 @@ PAGE = r"""<!doctype html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Lora:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#d97757">
+<link rel="icon" type="image/png" href="static/icon-192.png">
+<link rel="apple-touch-icon" href="static/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Pjesme">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
   :root {
     /* Claude / Anthropic tamna paleta */
@@ -378,6 +466,10 @@ PAGE = r"""<!doctype html>
                  font-family: var(--serif); }
   .upnote { font-size: .8rem; color: var(--muted); text-align: center;
             margin-top: 1rem; }
+  .resume { margin-top: 1rem; padding: .8rem 1rem; border: 1px solid var(--border);
+            border-radius: var(--radius); background: var(--panel2);
+            display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+  .resume span { flex: 1; font-size: .9rem; }
 
   /* Options bar */
   .optsbar { display: flex; flex-wrap: wrap; gap: .5rem .9rem; align-items: center;
@@ -510,8 +602,14 @@ PAGE = r"""<!doctype html>
         <div class="small">originalna pjesmarica — jedna pjesma po stranici</div>
         <input type="file" id="fileInput" accept=".pdf,application/pdf" hidden>
       </div>
+      <div id="resumeBox" class="resume hidden">
+        <span id="resumeText"></span>
+        <button class="btn primary" id="btnResume">▶ Nastavi</button>
+        <button class="btn" id="btnDiscard">Odbaci</button>
+      </div>
       <p class="upnote">Maksimalna veličina: __MAX_MB__ MB · Datoteka se obrađuje
-         na serveru i ne sprema se trajno.</p>
+         na serveru i ne sprema se trajno ·
+         <span title="Verzija aplikacije">v__VERSION__</span></p>
     </div>
   </div>
 
@@ -600,6 +698,34 @@ PAGE = r"""<!doctype html>
 const $ = id => document.getElementById(id);
 const state = { filename: "pjesmarica", songs: [], sel: -1 };
 
+/* Autosave skice uređivanja u pregledniku — osvježavanje/zatvaranje ne briše rad */
+const DRAFT_KEY = "pjesme-draft";
+let draftTimer = null;
+function saveDraft() {
+  if (!state.songs.length) return;
+  saveForm();
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({
+      filename: state.filename, songs: state.songs, sel: state.sel, savedAt: Date.now() }));
+  } catch (_e) { /* nema mjesta ili privatni način — ignoriraj */ }
+}
+function scheduleDraft() { clearTimeout(draftTimer); draftTimer = setTimeout(saveDraft, 400); }
+function readDraft() {
+  try {
+    const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
+    return d && Array.isArray(d.songs) && d.songs.length ? d : null;
+  } catch (_e) { return null; }
+}
+function loadDraft() {
+  const d = readDraft(), box = $("resumeBox");
+  if (!d) { box.classList.add("hidden"); return; }
+  const when = new Date(d.savedAt || Date.now())
+    .toLocaleString("hr-HR", { dateStyle: "short", timeStyle: "short" });
+  $("resumeText").textContent = "Zadnje uređivanje: " + (d.filename || "pjesmarica") +
+    " · " + d.songs.length + " pjesama · " + when;
+  box.classList.remove("hidden");
+}
+
 /* Tema (zadano tamna) */
 function applyTheme(t) {
   document.body.classList.toggle("light", t === "light");
@@ -662,6 +788,7 @@ function renderList() {
     ul.appendChild(li);
   });
   $("songCount").textContent = state.songs.length + " pjesama";
+  scheduleDraft();
 }
 function mini(txt, title, fn) {
   const b = document.createElement("button");
@@ -695,6 +822,7 @@ FIELDS.forEach(([id, k]) => {
     const s = state.songs[state.sel];
     if (!s) return;
     s[k] = $(id).value;
+    scheduleDraft();
     if (k === "title") {
       const li = $("songList").children[state.sel];
       if (li) li.querySelector(".t").textContent =
@@ -744,6 +872,7 @@ async function doParse(file) {
     wb.textContent = (data.warnings || []).join(" ");
     wb.classList.toggle("hidden", !(data.warnings || []).length);
     renderList(); loadForm(); showEditor(true);
+    saveDraft(); $("resumeBox").classList.add("hidden");
     toast("Učitano " + state.songs.length + " pjesama.");
   } catch (err) {
     toast(err.message, true);
@@ -754,10 +883,9 @@ async function doParse(file) {
 }
 
 $("btnBack").onclick = () => {
-  if (!state.songs.length ||
-      confirm("Učitati novu datoteku? Trenutne izmjene se gube.")) {
-    showEditor(false);
-  }
+  saveDraft();          // uređivanje ostaje spremljeno, može se nastaviti
+  showEditor(false);
+  loadDraft();
 };
 
 /* Opcije izgleda */
@@ -867,6 +995,31 @@ async function doExport(kind) {
 }
 $("btnPdf").onclick = () => doExport("pdf");
 $("btnDocx").onclick = () => doExport("docx");
+
+/* Nastavi / odbaci spremljenu skicu */
+$("btnResume").onclick = () => {
+  const d = readDraft();
+  if (!d) return;
+  state.filename = d.filename || "pjesmarica";
+  state.songs = d.songs.map(s => ({ include: true, ...s }));
+  state.sel = Math.min(Math.max(d.sel || 0, 0), state.songs.length - 1);
+  renderList(); loadForm(); showEditor(true);
+  toast("Nastavljeno zadnje uređivanje.");
+};
+$("btnDiscard").onclick = () => {
+  localStorage.removeItem(DRAFT_KEY); loadDraft(); toast("Skica obrisana.");
+};
+window.addEventListener("beforeunload", e => {
+  if (!$("viewEditor").classList.contains("hidden") && state.songs.length) {
+    saveDraft(); e.preventDefault(); e.returnValue = "";
+  }
+});
+loadDraft();
+
+/* PWA: registracija service workera (ne kešira ništa) */
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
 
 busy(null);
 loadForm();

@@ -348,19 +348,36 @@ def parse_page(page):
     }
 
 
-def parse_pdf(pdf_path, log=None):
-    """Parsira cijeli PDF -> lista pjesama (dict po parse_page)."""
+def parse_pdf_detailed(pdf_path, log=None):
+    """Parsira cijeli PDF -> (lista pjesama, statistika stranica).
+
+    statistika: pages (ukupno), skipped (bez prepoznate pjesme),
+    text_pages (imaju tekstualni sloj), landscape_pages (ležeće).
+    """
     songs = []
+    stats = {"pages": 0, "skipped": 0, "text_pages": 0, "landscape_pages": 0}
     with pdfplumber.open(pdf_path) as pdf:
         for page_num, page in enumerate(pdf.pages, 1):
+            stats["pages"] += 1
+            if page.width > page.height:
+                stats["landscape_pages"] += 1
             song = parse_page(page)
+            if song is not None:
+                stats["text_pages"] += 1
             if song and song["title"]:
                 songs.append(song)
                 if log:
                     log(f"  Stranica {page_num}: {song['title']}")
-            elif log:
-                log(f"  Stranica {page_num}: (preskočena – nema sadržaja)")
-    return songs
+            else:
+                stats["skipped"] += 1
+                if log:
+                    log(f"  Stranica {page_num}: (preskočena – nema sadržaja)")
+    return songs, stats
+
+
+def parse_pdf(pdf_path, log=None):
+    """Parsira cijeli PDF -> lista pjesama (dict po parse_page)."""
+    return parse_pdf_detailed(pdf_path, log)[0]
 
 
 # ── Pisanje jedne pjesme u Word dokument ──────────────────────────────────────
@@ -462,7 +479,10 @@ CHORUS_INDENT = Twips(720)
 
 def set_columns(doc, n_cols, margin_cm=0.5):
     """A4 ležeće s n_cols stupaca i minimalnim marginama."""
+    from docx.enum.section import WD_ORIENT
+
     section = doc.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
     section.page_width = Cm(29.7)
     section.page_height = Cm(21.0)
     section.left_margin = Cm(margin_cm)
@@ -470,12 +490,20 @@ def set_columns(doc, n_cols, margin_cm=0.5):
     section.top_margin = Cm(margin_cm)
     section.bottom_margin = Cm(margin_cm)
 
+    # Wordov predložak već ima <w:cols>; uredi postojeći umjesto dodavanja
+    # drugog (duplikat u krivom redoslijedu Word zna ignorirati).
     sectPr = section._sectPr
-    cols = OxmlElement("w:cols")
+    cols = sectPr.find(qn("w:cols"))
+    if cols is None:
+        cols = OxmlElement("w:cols")
+        doc_grid = sectPr.find(qn("w:docGrid"))
+        if doc_grid is not None:
+            doc_grid.addprevious(cols)   # cols mora biti prije docGrid
+        else:
+            sectPr.append(cols)
     cols.set(qn("w:num"), str(n_cols))
     cols.set(qn("w:space"), "720")
     cols.set(qn("w:equalWidth"), "1")
-    sectPr.append(cols)
 
 
 def song_compact_blocks(song):

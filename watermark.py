@@ -12,7 +12,7 @@ from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 LOGO_PATH = Path(__file__).with_name("assets") / "logo.png"
 
@@ -29,8 +29,15 @@ def normalize_level(level):
 
 
 def _fade(alpha, level):
-    """Od alpha kanala napravi blijedu sivu RGBA sliku zadane jačine (PNG bytes)."""
+    """Od alpha kanala napravi blijedu sivu RGBA sliku zadane jačine (PNG bytes).
+
+    Slika se obreže na vidljivi dio (bbox alfe) da žig bude vizualno
+    centriran, bez obzira na prazne rubove u izvornoj slici.
+    """
     gray, factor = LEVELS[normalize_level(level)]
+    bbox = alpha.getbbox()
+    if bbox:
+        alpha = alpha.crop(bbox)
     faded = alpha.point(lambda v: int(v * factor))
     out = Image.new("RGBA", alpha.size, gray + (0,))
     out.putalpha(faded)
@@ -46,8 +53,9 @@ def faded_logo_png(level: str) -> bytes:
     return _fade(im.getchannel("A"), level)
 
 
-# Maksimalna dimenzija korisničkog logotipa (zaštita)
-MAX_LOGO_PX = 4000
+# Maksimalna dimenzija korisničkog logotipa: žig je na stranici širok ~400 pt,
+# pa je 2000 px i dalje ~360 dpi; veće slike samo usporavaju PNG enkodiranje.
+MAX_LOGO_PX = 2000
 
 
 def faded_png_from_bytes(image_bytes: bytes, level: str) -> bytes:
@@ -62,11 +70,8 @@ def faded_png_from_bytes(image_bytes: bytes, level: str) -> bytes:
     im = im.convert("RGBA")
     lum = im.convert("L")                       # svjetlina
     from_white = lum.point(lambda v: 255 - v)   # bijelo->0, crno->255
-    orig_a = im.getchannel("A")
-    # kombiniraj s postojećom prozirnošću (min)
-    combined = Image.new("L", im.size)
-    combined.putdata([min(a, b) for a, b in zip(from_white.getdata(),
-                                                orig_a.getdata())])
+    # kombiniraj s postojećom prozirnošću (po pikselu min) — vektorizirano
+    combined = ImageChops.darker(from_white, im.getchannel("A"))
     return _fade(combined, level)
 
 
