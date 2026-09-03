@@ -18,7 +18,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
 from app import (_skipped_msg, app, body_to_parts, editable_to_song,
-                 parse_options, song_to_editable, strip_chord_lines)
+                 parse_options, safe_stem, song_to_editable,
+                 strip_chord_lines)
 from pdf_to_word import SECTION_LABELS, is_chord_line
 from watermark import faded_logo_png, faded_png_from_bytes
 
@@ -366,3 +367,62 @@ def test_custom_logo_white_removed_and_cropped(client):
     bad = _export(client, "pdf", EDITED, {"watermark": True},
                   logo="data:image/png;base64,bm90YW5pbWFnZQ==")
     assert bad.status_code == 200                            # fallback na ugrađeni
+
+
+# ── Rubni slučajevi pronađeni u drugoj rundi provjere ─────────────────────────
+
+NOVA = {"title": "Nova pjesma", "key": "", "subtitle": "", "pjesmarica": "",
+        "body": "Verse 1\n"}          # ono što daje gumb "＋ Nova" u editoru
+PUNA = {"title": "T", "key": "", "subtitle": "", "pjesmarica": "",
+        "body": "Verse 1\nstvarni tekst"}
+
+
+@pytest.mark.parametrize("kind", ["pdf", "docx"])
+def test_export_empty_songs_gives_clear_error(client, kind):
+    """Prazna pjesma je rušila kompaktni izvoz (BalancedColumns, 500)."""
+    r = _export(client, kind, [NOVA])
+    assert r.status_code == 422 and "Nema teksta za ispis" in r.get_json()["error"]
+
+
+def test_export_empty_song_alongside_full_one_works(client):
+    assert _export(client, "pdf", [NOVA, PUNA]).status_code == 200
+    # klasični izgled ispisuje naslov, pa prazna pjesma nije prepreka
+    assert _export(client, "pdf", [NOVA], {"layout": "klasicno"}).status_code == 200
+
+
+def test_export_only_chords_with_stripping(client):
+    samo_akordi = dict(PUNA, body="Verse 1\nD A Fis H")
+    assert _export(client, "pdf", [samo_akordi]).status_code == 422
+    assert _export(client, "pdf", [samo_akordi],
+                   {"strip_chords": False}).status_code == 200
+
+
+def test_password_protected_pdf(client):
+    from reportlab.lib import pdfencrypt
+    b = io.BytesIO()
+    c = canvas.Canvas(b, pagesize=A4,
+                      encrypt=pdfencrypt.StandardEncryption("tajna", canPrint=1))
+    c.setFont("Helvetica", 12)
+    c.drawString(50, 700, "Tajna")
+    c.showPage()
+    c.save()
+    r = _parse(client, b.getvalue(), "lock.pdf")
+    assert r.status_code == 422 and "lozinkom" in r.get_json()["error"]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("Misa_print.pdf", "Misa"), ("Misa_out.pdf", "Misa"),
+    ("Čćžšđ.pdf", "Čćžšđ"), ("Miša 7.9.pdf", "Miša 7.9"),
+    ("", "pjesmarica"), ("a" * 200, "a" * 80), ("x\x00y.pdf", "xy"),
+    ("../../etc/passwd", "pjesmarica"), ("..\\..\\win.pdf", "win"),   # separatori uklonjeni, ostaje bezopasno ime
+])
+def test_safe_stem(raw, expected):
+    assert safe_stem(raw) == expected
+
+
+def test_download_name_keeps_croatian_letters(client):
+    r = client.post("/export/pdf", data=json.dumps(
+        {"filename": "Miša 7.9. Šibenik", "options": {}, "songs": [PUNA]}),
+        content_type="application/json")
+    assert r.status_code == 200
+    assert "Mi%C5%A1a" in r.headers["Content-Disposition"]     # RFC 5987, UTF-8

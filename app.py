@@ -18,12 +18,12 @@ import tempfile
 from pathlib import Path
 
 from flask import Flask, jsonify, make_response, request, send_file
-from werkzeug.utils import secure_filename
 
 from watermark import faded_png_from_bytes
 
 from pdf_to_word import (FONT_CHOICES, SECTION_LABELS, build_docx,
-                         build_docx_compact, is_chord_line, parse_pdf_detailed)
+                         build_docx_compact, is_chord_line,
+                         parse_pdf_detailed, song_compact_blocks)
 from pdf_writer import build_pdf, build_pdf_compact
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "50"))
@@ -170,6 +170,44 @@ def parse_options(d):
     }
 
 
+_UNSAFE_NAME = re.compile(r"[\\/\x00-\x1f\x7f]")
+
+
+def safe_stem(name, fallback="pjesmarica"):
+    """Naziv datoteke za preuzimanje — čuva hrvatska slova.
+
+    Koristi se samo kao ime koje korisnik preuzima (nikad kao putanja na
+    disku), pa dijakritike ne treba gubiti kao secure_filename. Miču se
+    separatori i kontrolni znakovi, te sufiks izlaza da se ne gomila
+    (Misa_print_print...).
+    """
+    stem = _UNSAFE_NAME.sub("", str(name or ""))
+    stem = Path(stem).stem
+    stem = re.sub(r"\s+", " ", stem).strip().strip(".")
+    stem = re.sub(r"_(print|out)$", "", stem)
+    return stem[:80].strip() or fallback
+
+
+def _is_password_error(exc):
+    """Je li iznimka (ili njezin uzrok) zaštita PDF-a lozinkom."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if "password" in type(exc).__name__.lower():
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def _has_printable_content(songs, options):
+    """Ima li išta za ispis u odabranom izgledu (inače bi izlaz bio prazan)."""
+    if options["layout"] == "kompaktno":
+        return any(song_compact_blocks(s) for s in songs)
+    return any(s["title"].strip() or s["subtitle"] or s["pjesmarica"] or
+               s["notes"] or any(ls for _l, ls in s["sections"])
+               for s in songs)
+
+
 def export_payload():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -198,7 +236,11 @@ def export_payload():
     songs = [editable_to_song(s) for s in raw_songs]
     if options["strip_chords"]:
         songs = [strip_chord_lines(s) for s in songs]
-    stem = secure_filename(str(data.get("filename") or ""))[:80] or "pjesmarica"
+    if not _has_printable_content(songs, options):
+        return None, None, None, (jsonify(error=(
+            "Nema teksta za ispis — odabrane pjesme su prazne. Upiši tekst "
+            "ili kvačicom uključi pjesmu koja ima sadržaj.")), 422)
+    stem = safe_stem(data.get("filename"))
     return songs, options, stem, None
 
 
@@ -285,9 +327,7 @@ def parse():
     if not file.filename.lower().endswith(".pdf"):
         return jsonify(error="Datoteka mora biti PDF (.pdf)."), 400
 
-    stem = Path(secure_filename(file.filename)).stem[:80] or "pjesmarica"
-    # makni sufiks izlaza da se kod ponovnog uploada ne gomila (_print_print...)
-    stem = re.sub(r"_(print|out)$", "", stem) or "pjesmarica"
+    stem = safe_stem(file.filename)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         pdf_path = Path(tmpdir) / "ulaz.pdf"
@@ -296,7 +336,13 @@ def parse():
             songs, stats = parse_pdf_detailed(str(pdf_path))
         except Exception as exc:
             app.logger.exception("Parsiranje nije uspjelo")
-            return jsonify(error=f"Ne mogu pročitati PDF: {exc}"), 500
+            if _is_password_error(exc):
+                return jsonify(error=(
+                    "PDF je zaštićen lozinkom pa ga ne mogu otvoriti. "
+                    "Spremi ga bez zaštite (npr. Ispis → Spremi kao PDF) "
+                    "pa pokušaj ponovno.")), 422
+            detalj = str(exc) or type(exc).__name__
+            return jsonify(error=f"Ne mogu pročitati PDF: {detalj}"), 500
 
     if not songs:
         if stats["text_pages"] == 0:
