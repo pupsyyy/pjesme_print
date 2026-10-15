@@ -396,8 +396,11 @@ DB_PAGE = r"""<!doctype html>
   .sheet .sec:first-child .lab { margin-top: .2em; }
   .sheet .sec { margin-bottom: .9em; }
   .sheet .ln { white-space: pre; min-height: 1.35em; border-radius: 4px; }
-  .sheet .seg { display: inline-flex; flex-direction: column; vertical-align: bottom; white-space: pre; }
+  .sheet .seg { display: inline-flex; flex-direction: column; align-items: flex-start;
+                vertical-align: bottom; white-space: pre; }
   .sheet .ch { font-weight: 700; color: var(--accent); padding-right: .3em; min-height: 1.35em; }
+  .sheet .ly { min-height: 1.35em; }
+  .sheet .ly.hy::after { content: "-"; }
   .sheet .conly { font-weight: 700; color: var(--accent); }
   .sheet .meta { color: var(--muted); }
   .sheet .diff { background: var(--add); }
@@ -575,10 +578,25 @@ function renderSheet(song, other) {
   });
   return wrap;
 }
+/* Kao izvorna aplikacija: kad je akord širi od sloga usred riječi, crtica ("alelu-ja") */
+function fixHyphens(root) {
+  root.querySelectorAll(".ln").forEach(ln => {
+    const segs = [...ln.querySelectorAll(".seg")];
+    segs.forEach((seg, k) => {
+      const next = segs[k + 1];
+      if (!next) return;
+      const ch = seg.firstChild, ly = seg.lastChild, t = ly.textContent, nt = next.lastChild.textContent;
+      if (t && nt && /[\p{L}\p{N}]$/u.test(t) && /^[\p{L}\p{N}]/u.test(nt) &&
+          ch.offsetWidth > ly.offsetWidth + 1) ly.classList.add("hy");
+    });
+  });
+}
 function showView(node) {
   $("welcome").classList.add("hidden");
   const v = $("view"); v.innerHTML = ""; v.append(node); v.classList.remove("hidden");
   $("main").scrollTop = 0;
+  fixHyphens(v);
+  if (window.matchMedia("(max-width: 820px)").matches) v.scrollIntoView({ behavior: "smooth" });
 }
 
 /* ── Popis ── */

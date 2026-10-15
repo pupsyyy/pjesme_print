@@ -78,7 +78,9 @@ def is_chord_line(line: str) -> bool:
     tokens = line.split()
     if not tokens:
         return False
-    return all(bool(_CHORD_TOKEN.match(t)) and len(t) <= 7 for t in tokens)
+    # zvjezdica iza akorda (npr. "D/FIS*") je napomena svirača, ne riječ
+    return all(bool(_CHORD_TOKEN.match(t.rstrip("*"))) and len(t.rstrip("*")) <= 7
+               for t in tokens)
 
 
 def _style(style=None):
