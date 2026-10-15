@@ -361,13 +361,34 @@ def detect_profile(rows):
 
 # ── Stranica -> zaglavlje + blokovi ───────────────────────────────────────────
 
+def _crosses(rows, bound):
+    """Ima li redak čiji se tekst neprekinuto proteže preko granice stupca?"""
+    for r in rows:
+        gs = r.glyphs
+        for a, b in zip(gs, gs[1:]):
+            if a["x"] < bound - 1 <= b["x"] and b["x"] - a["x1"] < 12:
+                return True
+    return False
+
+
 def _split_columns(rows, page_w):
-    """Stranice u više stupaca (starija verzija): podijeli retke po stupcima."""
+    """Stranice u više stupaca (starija verzija): podijeli retke po stupcima.
+
+    Stupac počinje tamo gdje počinje labela ili barem dva retka teksta, a
+    nijedan redak ne prelazi tu granicu bez razmaka (inače bi dugi redak
+    s puno vodećih razmaka prerezao tekst).
+    """
     starts = sorted(r.x for r in rows if (r.size > 13 and r.bold) or not r.bold)
+    label_x = [r.x for r in rows if r.size > 13 and r.bold]
     lefts = []
     for x in starts:
         if not lefts or x > lefts[-1] + 120:
             lefts.append(x)
+    lefts = lefts[:1] + [
+        x for x in lefts[1:]
+        if (any(abs(x - lx) < 1 for lx in label_x)
+            or sum(1 for sx in starts if abs(sx - x) < 1) >= 2)
+        and not _crosses(rows, x)]
     if len(lefts) <= 1:
         return [(min(starts) if starts else LEFT, rows)]
     bounds = lefts[1:] + [page_w + 1]
@@ -613,10 +634,12 @@ def extract(data, filename=""):
                 skipped.append(i)
             pages.append((i, pg))
     songs, warnings = songs_from_pages(pages, filename)
+    titled = sum(1 for _i, pg in pages if pg and pg["title"])
     if skipped:
         warnings.append("Bez teksta (sken?) — preskočene stranice: "
                         + ", ".join(map(str, skipped)) + ".")
-    return {"songs": songs, "pages": n, "skipped": skipped, "warnings": warnings}
+    return {"songs": songs, "pages": n, "skipped": skipped, "warnings": warnings,
+            "titled": titled}
 
 
 # ── Pomoćno: tekst pjesme, ChordPro, "akordi iznad teksta" ────────────────────

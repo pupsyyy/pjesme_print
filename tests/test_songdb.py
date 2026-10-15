@@ -373,3 +373,37 @@ def test_private_sources_recreated_identically(path):
                                       first_page=song["source"]["pages"][0])
         rep = chord_compare.compare(d.tobytes(), out)
         assert rep["identical"], song["title"] + "\n" + chord_compare.summary(rep)
+
+
+def test_long_indented_lines_do_not_split_columns():
+    song = _song_v2()
+    song["sections"].append({"label": "Outro", "lines": [
+        {"text": " " * 45 + "x2 na kraju", "chords": []},
+        {"text": " " * 45 + "još jedan uvučen", "chords": []},
+        {"text": "dugi redak koji se proteže preko sredine stranice i dalje desno", "chords": [[0, "G"]]},
+    ]})
+    pdf1, back, pdf2 = _roundtrip(song)
+    assert chord_compare.compare(pdf1, pdf2)["identical"]
+    assert "columns" not in back["layout"]
+    assert back["sections"][-1]["lines"] == song["sections"][-1]["lines"]
+
+
+def test_web_rejects_pdf_without_song_titles(client):
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.pdfgen import canvas
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=landscape(A4))
+    c.setFont("Helvetica", 9)
+    c.drawString(40, 550, "Bože svet si aleluja")
+    c.drawString(40, 538, "slavimo te aleluja")
+    c.showPage()
+    c.save()
+    rep = _upload(client, buf.getvalue()).get_json()["reports"][0]
+    assert "nisu prepoznate pjesme" in rep["error"]
+    assert client.get("/db/stats").get_json()["songs"] == 0
+
+
+def test_download_names_without_diacritics():
+    from songdb_web import _ascii_name
+    assert _ascii_name("Aleluja (Bože svet si ) – Đurđevak") == "Aleluja_Boze_svet_si_Durdevak"
+    assert _ascii_name("!!!") == "pjesma"

@@ -14,6 +14,8 @@ import hmac
 import io
 import json
 import os
+import re
+import unicodedata
 
 from flask import (Blueprint, Response, g, jsonify, make_response, request,
                    send_file)
@@ -52,8 +54,10 @@ def _require_write():
 
 
 def _ascii_name(name):
-    keep = "".join(c if c.isalnum() and c.isascii() else "_" for c in name)
-    return keep.strip("_")[:60] or "pjesma"
+    """Naziv datoteke bez dijakritika (Bože svet si -> Boze_svet_si)."""
+    s = unicodedata.normalize("NFKD", (name or "").translate({ord("đ"): "d", ord("Đ"): "D"}))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_")[:60] or "pjesma"
 
 
 def _pdf_response(data, name, inline=False):
@@ -94,6 +98,11 @@ def db_import():
         if not res["songs"]:
             reports.append({"file": name, "error": "U PDF-u nema teksta pjesama "
                             "(skenirani PDF?).", "warnings": res["warnings"]})
+            continue
+        if not res["titled"]:
+            reports.append({"file": name, "error": "U PDF-u nisu prepoznate pjesme "
+                            "(nema naslova). Baza prima PDF-ove izvezene iz aplikacije "
+                            "za pjesmarice — jedna pjesma po stranici, naslov na vrhu."})
             continue
         rep = songdb.import_songs(conn, res["songs"], name,
                                   hashlib.sha256(data).hexdigest(), res["pages"])
@@ -631,6 +640,8 @@ function renderList() {
     ul.append(li);
   });
   if (!state.songs.length) ul.append(el("li", "muted", state.q ? "Nema rezultata." : "Baza je prazna."));
+  if (state.total > state.songs.length)
+    ul.append(el("li", "muted", "Prikazano " + state.songs.length + " od " + state.total + " — suzi pretragu."));
   renderSel();
 }
 function renderSel() {
@@ -669,7 +680,7 @@ async function openSong(id) {
     const act = el("div", "actions");
     const a1 = el("a", "btn", "⬇ PDF (izvorni izgled)"); a1.href = "db/songs/" + id + "/pdf";
     const a2 = el("a", "btn", "⬇ ChordPro"); a2.href = "db/songs/" + id + "/chordpro";
-    const a3 = el("a", "btn", "JSON"); a3.href = "api/v1/songs/" + id; a3.target = "_blank";
+    const a3 = el("a", "btn", "JSON"); a3.href = "db/songs/" + id; a3.target = "_blank";
     const del = el("button", "btn danger", "Obriši");
     del.onclick = async () => {
       if (!confirm("Obrisati pjesmu \"" + s.title + "\" iz baze?")) return;
