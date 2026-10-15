@@ -12,3 +12,7 @@ tests
 DEPLOY.md
 README.md
 requirements-dev.txt
+data
+tools
+docs
+.env

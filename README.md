@@ -32,6 +32,59 @@ urediš pjesme u pregledniku i preuzmeš **novi PDF ili Word**.
 - **Tamna tema** (zadano) sa prekidačem na svijetlu; verzija aplikacije
   vidljiva na početnom zaslonu i na `/health`
 
+## Baza pjesama (`/baza`)
+
+Gumb **🗂 Baza pjesama** u zaglavlju. Ubaciš PDF-ove (više odjednom) i od
+njih nastaje baza (SQLite) u kojoj je za svaku pjesmu:
+
+- **metapodaci**: naslov, podnaslov (izvođač), tonalitet (Key), blokovi
+  poput „Pjesmarica" s brojevima, izvorna datoteka i stranica
+- **tekst** po sekcijama (Verse 1, Chorus…)
+- **akordi s točnim mjestom** — za svaki akord indeks slova iznad kojeg
+  počinje (kao `[G]` u ChordPro formatu):
+  `{"text": "Bože svet si aleluja,", "chords": [[5, "G"], [16, "C"]]}`
+
+**Duplikati**: identična pjesma se preskače; ako je tekst nove pjesme
+**≥ 80 % sličan** postojećoj, uvoz je ne sprema nego pita — usporedba
+jedne uz drugu (razlike označene) i odluka *Zadrži postojeću* /
+*Zamijeni novom* (isti id) / *Zadrži obje*.
+
+**Točnost**: iz baze se pjesma iscrtava u izvornom izgledu aplikacije
+(Open Sans 1.10, isti raspored) i uspoređuje s izvornim PDF-om glif po glif.
+Na stvarnim PDF-ovima: **17/17 pjesama identično** (3 744 znaka, odstupanje
+≤ 0,003 pt). Provjera bilo kojeg PDF-a:
+
+```bash
+python3 tools/roundtrip.py izvor.pdf [još.pdf ...] [--png slike/]
+```
+
+Iz baze: pretraga (naslov, broj, tekst, bez obzira na dijakritike),
+pregled s akordima, preuzimanje PDF-a (izvorni izgled), ChordPro i JSON,
+te **„Napravi pjesmaricu"** — odabrane pjesme otvore se u uredniku
+(kompaktno/klasično, PDF/Word).
+
+### API za druge aplikacije (samo čitanje)
+
+| Zahtjev | Odgovor |
+|---|---|
+| `GET /api/v1` | broj pjesama, popis endpointa |
+| `GET /api/v1/songs?q=&limit=&offset=` | popis (id, naslov, podnaslov, key, brojevi) |
+| `GET /api/v1/songs/<id>` | cijela pjesma: `meta`, `sections` (tekst + akordi), `lyrics`, `chordpro`, `sources` |
+| `GET /api/v1/songs/<id>.cho` | ChordPro tekst |
+| `GET /api/v1/songs/<id>.pdf` | PDF u izvornom izgledu |
+| `GET /api/v1/export` | sve pjesme (JSON) — ujedno i backup |
+
+Ako je postavljen `API_TOKEN`, šalje se `Authorization: Bearer <token>`
+(ili `?token=`). CORS je dopušten. Primjer:
+
+```bash
+curl -H "Authorization: Bearer $API_TOKEN" https://print.josip.cloud/api/v1/songs?q=aleluja
+```
+
+Format pjesme: `sections[].lines[]` = `{"text", "chords": [[indeks, "akord"], ...]}`;
+redak samo s akordima ima `"text": ""` (indeks = stupac). Polja `fmt`,
+`layout`, `space`, `col` služe samo za vjerno iscrtavanje izvornika.
+
 ## Pokretanje
 
 ```bash
@@ -76,5 +129,13 @@ deploy na serveru prošao.
   praksi rijetko, a opcija „Ukloni akorde" može se isključiti.
 - **Labele sekcija**: samostalno „C" ili „B" u retku prepoznaje se kao
   labela (kao u originalnom konverteru).
+- **Baza pjesama** razumije PDF-ove aplikacije za pjesmarice (dart_pdf,
+  Open Sans; novija i starija verzija). Najmanji razmak između akorda u
+  novijoj verziji izmjeren je između 2,75 i 4,25 pt (uzet je 3,117 pt =
+  razmak) — ako se ikad pojavi pjesma koja se ne rekreira identično,
+  `tools/roundtrip.py` pokaže gdje.
+- Kod starije verzije aplikacije akord koji nema mjesta samo se pomakne
+  udesno; tada se pamti slovo **ispod** akorda (izvorno mjesto se iz PDF-a
+  ne može znati) — izgled je isti.
 - **Naslov** je prvi neprazni redak stranice (lijeva polovica). Stranica bez
   takvog retka se preskače, a aplikacija javi koliko ih je preskočeno.

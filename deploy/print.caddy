@@ -14,11 +14,12 @@
 # LOZINKA (preporučeno — aplikacija je inače javna svakome tko zna adresu):
 #   caddy hash-password          (upiši željenu lozinku, ispiše hash koji počinje s $2a$)
 #   pa odkomentiraj tri retka basic_auth bloka dolje i zalijepi hash umjesto <HASH>.
-#   /health ostaje bez lozinke (za nadzor izvana, npr. UptimeRobot).
+#   /health ostaje bez lozinke (za nadzor izvana, npr. UptimeRobot), a
+#   /api/v1/* (baza pjesama za druge aplikacije) štiti API_TOKEN iz .env.
 #   Napomena: u Caddyju starijem od 2.8 direktiva se zove "basicauth".
 
 print.josip.cloud {
-    # @protected not path /health
+    # @protected not path /health /api/v1*
     # basic_auth @protected {
     #     josip <HASH>
     # }
