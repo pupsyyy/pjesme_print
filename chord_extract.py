@@ -32,11 +32,17 @@ import opensans
 # ── Profili rasporeda dviju verzija aplikacije ────────────────────────────────
 
 PROFILES = {
-    # novija verzija (2026): prirodna visina retka fonta
-    "v2": {"pair": 13.342, "line": 16.342, "chord_gap": 4.881, "hyphenate": True},
-    # starija verzija (2025): fiksna visina retka 16 pt, brojevi stranica
+    # novija verzija (2026): prirodna visina retka fonta. Ako akord nema mjesta
+    # (min. razmak do prethodnog), u tekst se ubacuju crtice: usred riječi
+    # vidljive ("alelu-ja"), drugdje nevidljive (samo pomaknu tekst/akord).
+    # Razmak je izmjeren između 2.754 i 4.254 pt -> uzet je jedan razmak.
+    "v2": {"pair": 13.342, "line": 16.342, "chord_gap": 532 / 2048 * 12,
+           "hyphenate": True},
+    # starija verzija (2025): fiksna visina retka 16 pt, brojevi stranica;
+    # akord se samo pomakne (točno 8 pt iza prethodnog), tekst se ne mijenja
     "v1": {"pair": 13.0, "line": 16.0, "chord_gap": 8.0, "hyphenate": False},
 }
+HYPHEN_W = 659 / 2048          # širina crtice (em) — "nevidljiva crtica" v2
 DEFAULT_PROFILE = "v2"
 
 LEFT = 28.3465            # lijeva i gornja margina (1 cm)
@@ -173,22 +179,44 @@ def _rows(glyphs):
 
 # ── Rekonstrukcija teksta retka ───────────────────────────────────────────────
 
-def proportional_text(row, left):
+def _split_gap(gap, sw, hw, first, spacers):
+    """Razmak između riječi -> (broj razmaka, broj nevidljivih crtica)."""
+    if gap <= 0.35 * sw:
+        return 0, 0
+    best = None
+    for m in range(0, 4 if spacers else 1):
+        rest = gap - m * hw
+        n = round(rest / sw)
+        if n < (0 if first else 1) and not (m and n == 0 and not first):
+            continue
+        err = abs(rest - n * sw)
+        if best is None or err < best[0] - 0.02:
+            best = (err, n, m)
+    if best is None or best[0] > 0.3 * sw:
+        n = round(gap / sw)
+        return (max(1, n) if not first else n), 0
+    return best[1], best[2]
+
+
+def proportional_text(row, left, spacers=False):
     """Tekst retka s razmacima + x početka svakog znaka (i kraja teksta).
 
     Aplikacija ne crta razmake; broj razmaka = razmak / širina razmaka.
     Vodeći razmaci (redak ne počinje na lijevom rubu) se čuvaju.
+    spacers=True (v2): razmak može sadržavati i nevidljive crtice ispred
+    akorda — one nisu dio teksta, samo pomiču x.
     """
     sw = opensans.SPACE * row.size
+    hw = HYPHEN_W * row.size
     chars, xs = [], []
     cur = left
     for g in row.glyphs:
         gap = g["x"] - cur
-        if gap > 0.35 * sw:
-            n = max(1, round(gap / sw)) if chars else round(gap / sw)
-            for k in range(n):
-                chars.append(" ")
-                xs.append(cur + k * sw)
+        n, m = _split_gap(gap, sw, hw, not chars, spacers and bool(chars))
+        cur += m * hw
+        for k in range(n):
+            chars.append(" ")
+            xs.append(cur + k * sw)
         chars.append(g["text"])
         xs.append(g["x"])
         cur = g["x1"]
@@ -241,7 +269,7 @@ def _boundary(text, i):
 
 def anchor_pair(chord_row, lyric_row, left, prof):
     """Vrati redak {"text", "chords"} s indeksima akorda."""
-    text, xs, x_end = proportional_text(lyric_row, left)
+    text, xs, x_end = proportional_text(lyric_row, left, spacers=prof["hyphenate"])
     pos = xs + [x_end]
     toks = _chord_tokens(chord_row, pos, prof)
 
@@ -252,6 +280,27 @@ def anchor_pair(chord_row, lyric_row, left, prof):
         cand = [i for i in range(lo, len(pos)) if abs(pos[i] - x0) < tol]
         if cand:
             i = cand[0]
+        elif x0 > pos[-1] + tol and lo <= len(text):
+            # iza kraja teksta: razmaci na kraju retka (nevidljivi) ili
+            # pomak (v1: iza prethodnog akorda; v2: nevidljive crtice)
+            sw = opensans.SPACE * lyric_row.size
+            hw = HYPHEN_W * lyric_row.size
+            pushed = bool(anchors) and not prof["hyphenate"] and abs(
+                x0 - (toks[len(anchors) - 1][1]
+                      + opensans.width(toks[len(anchors) - 1][0], True, chord_row.size)
+                      + prof["chord_gap"])) < tol
+            n_sp = 0
+            if not pushed:
+                for m in range(0, 4 if prof["hyphenate"] else 1):
+                    n = round((x0 - pos[-1] - m * hw) / sw)
+                    if n >= 0 and abs(pos[-1] + n * sw + m * hw - x0) < max(tol, 0.06):
+                        n_sp = n
+                        break
+            if n_sp:
+                base = pos[-1]
+                text += " " * n_sp
+                pos = pos[:-1] + [base + k * sw for k in range(n_sp)] + [base + n_sp * sw]
+            i = len(text)
         else:
             # akord je bio pomaknut udesno: sidro je znak ispod njegova početka;
             # v2 usred riječi ubacuje crticu, pa je ondje sidro na granici riječi
@@ -469,6 +518,7 @@ def parse_page(page, prof_name=None):
 
     columns = _split_columns(body, W)
     result["columns"] = len(columns)
+    result["col_lefts"] = [round(c[0], 3) for c in columns]
     for ci, (left, crows) in enumerate(columns):
         for bi, block in enumerate(_blocks(crows)):
             label = None
@@ -477,6 +527,8 @@ def parse_page(page, prof_name=None):
                 label = proportional_text(block[0], left)[0].strip()
                 rest = block[1:]
             b = {"label": label, "lines": _lines(rest, left, prof)}
+            if len(columns) > 1:
+                b["col"] = ci
             if ci == 0 and bi == 0 and header_bottom is not None:
                 gap = block[0].top - header_bottom
             else:
@@ -525,12 +577,17 @@ def songs_from_pages(pages, filename=""):
             in_header = False
         if pg["columns"] > 1:
             song["layout"]["columns"] = pg["columns"]
+            song["layout"]["col_lefts"] = pg["col_lefts"]
         if pg.get("page_numbers"):
             song["layout"]["page_numbers"] = True
         for b in pg["blocks"]:
             lab = (b["label"] or "").strip()
             if in_header and lab and lab.casefold() in META_LABELS:
                 meta, extra = _split_meta(b)
+                if "col" in b:
+                    meta["col"] = b["col"]
+                    if extra:
+                        extra["col"] = b["col"]
                 song["meta"].append(meta)
                 if extra:
                     song["sections"].append(extra)
@@ -538,8 +595,9 @@ def songs_from_pages(pages, filename=""):
                 continue
             in_header = False
             sec = {"label": b["label"], "lines": b["lines"]}
-            if "space" in b:
-                sec["space"] = b["space"]
+            for k in ("space", "col"):
+                if k in b:
+                    sec[k] = b[k]
             song["sections"].append(sec)
     return songs, warnings
 

@@ -26,8 +26,9 @@ lokalno su bili u scratchpadu.
   v1: redak 16.0, akord→tekst 13.0, labela visina 19.0/ascent 14.335, redak baseline 12.411,
   podnaslov visina 16.757; ima brojeve stranica (Helvetica 12 dolje desno).
 - Vodoravno: akord x = lijevo + širina(tekst[:indeks]) (točno, Open Sans 1.10).
-  Ako bi akord udario u prethodni: v2 → razmak min **4.881 pt**; ako je sidro usred
-  riječi ubaci se crtica u tekst ("alelu-ja") dok ne stane; inače se akord pomakne.
+  Ako bi akord udario u prethodni: v2 → min razmak (2.754–4.254 pt izmjereno, uzet 3.117 =
+  razmak): ubacuju se crtice u tekst dok ne stane — usred riječi vidljive ("alelu-ja"),
+  na kraju retka nevidljive (samo pomak 3.861 pt).
   v1 → razmak min 8.0, tekst se nikad ne mijenja (samo se akord pomakne).
 - Posebni redci: (a) bold redak akorda bez teksta = "monospace" stupci (x = lijevo +
   stupac·7.2); (b) bold mono redak teksta odmah ispod (Isus Krist "Aa le luu ja") =
@@ -38,8 +39,9 @@ lokalno su bili u scratchpadu.
 ## Arhitektura (u izradi)
 - `opensans.py` — metrike/registracija fonta ✅
 - `chord_extract.py` — parser PDF → pjesme s akordima (indeksi) ✅ (`python3 chord_extract.py x.pdf` ispiše ChordPro)
-- `chord_render.py` — iscrtavanje pjesme u izvornom izgledu (v2/v1 profil)
-- `chord_compare.py` — usporedba izvornog i rekreiranog PDF-a (glif po glif)
+- `chord_render.py` — iscrtavanje pjesme u izvornom izgledu (v2/v1 profil, stupci) ✅
+- `chord_compare.py` — usporedba izvornog i rekreiranog PDF-a (glif po glif) ✅
+- `tools/roundtrip.py izvor.pdf ... [--png DIR]` — dokaz: PDF→baza(JSON)→PDF→usporedba ✅
 - `songdb.py` — SQLite (songs, pending, imports), normalizacija, dedup ≥0.80, ChordPro
 - `songdb_web.py` — Blueprint: /baza (UI), /db/* (pisanje, opcionalno DB_PASSWORD),
   /api/v1/* (čitanje za druge aplikacije, opcionalno API_TOKEN, CORS)
@@ -49,13 +51,16 @@ lokalno su bili u scratchpadu.
 `{"text": "Bože svet si aleluja,", "chords": [[5,"G"],[16,"C"]]}`;
 samo akordi: `{"text": "", "chords": [[0,"C"],[6,"a"]]}` (stupci);
 `fmt` za vjerni ispis: `{"text":"mono"}`, `{"chord_text":" D/FIS*   G    h    A4"}`, `{"text":"bold"}`.
-Sekcija: `{"label": "Verse 1"|null, "lines": [...], "attached"?: true, "space"?: n}`.
+Sekcija: `{"label": "Verse 1"|null, "lines": [...], "attached"?: true, "space"?: n, "col"?: i}`.
+Akord iza kraja teksta: tekst dobije razmake na kraju (ako ih je izvornik imao).
 Pjesma: title, key, subtitle, meta [{label, values}], sections, layout {profile}, source.
 
 ## Status
 - [x] analiza formata, font, pravila rasporeda
 - [x] parser chord_extract.py radi na svih 5 + klajanje (crtice uklonjene, v1 pomaknuti akordi → slovo ispod)
-- [ ] parser  - [ ] renderer + usporedba  - [ ] baza  - [ ] UI/API  - [ ] testovi/docs/PR
+- [x] renderer + usporedba: **17/17 pjesama identično** (5 korisnikovih v2 + 12 iz klajanje v1,
+      3744 glifa, max odstupanje 0.0025 pt; pikseli se razlikuju samo u zaglađivanju rubova)
+- [ ] baza  - [ ] UI/API  - [ ] testovi/docs/PR
 
 ## Grana / PR
 Grana `claude/app-migration-hostinger-vps-q2z32b`, nova od main nakon PR #15.
