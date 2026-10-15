@@ -42,7 +42,8 @@ lokalno su bili u scratchpadu.
 - `chord_render.py` — iscrtavanje pjesme u izvornom izgledu (v2/v1 profil, stupci) ✅
 - `chord_compare.py` — usporedba izvornog i rekreiranog PDF-a (glif po glif) ✅
 - `tools/roundtrip.py izvor.pdf ... [--png DIR]` — dokaz: PDF→baza(JSON)→PDF→usporedba ✅
-- `songdb.py` — SQLite (songs, pending, imports), normalizacija, dedup ≥0.80, ChordPro
+- `songdb.py` — SQLite (songs, pending, imports), normalizacija, dedup ≥0.80, ChordPro ✅
+  (fingerprint = semantički sadržaj bez izgleda; sličnost = difflib nad normaliziranim riječima teksta)
 - `songdb_web.py` — Blueprint: /baza (UI), /db/* (pisanje, opcionalno DB_PASSWORD),
   /api/v1/* (čitanje za druge aplikacije, opcionalno API_TOKEN, CORS)
 - docker-compose: volumen ./data:/app/data, env DB_PATH
@@ -60,7 +61,8 @@ Pjesma: title, key, subtitle, meta [{label, values}], sections, layout {profile}
 - [x] parser chord_extract.py radi na svih 5 + klajanje (crtice uklonjene, v1 pomaknuti akordi → slovo ispod)
 - [x] renderer + usporedba: **17/17 pjesama identično** (5 korisnikovih v2 + 12 iz klajanje v1,
       3744 glifa, max odstupanje 0.0025 pt; pikseli se razlikuju samo u zaglađivanju rubova)
-- [ ] baza  - [ ] UI/API  - [ ] testovi/docs/PR
+- [x] baza (testirano: uvoz 17, ponovni uvoz → duplikat, izmjena akorda → konflikt 100 %, replace)
+- [ ] UI/API (songdb_web.py Blueprint)  - [ ] testovi/docs/PR
 
 ## Grana / PR
 Grana `claude/app-migration-hostinger-vps-q2z32b`, nova od main nakon PR #15.
