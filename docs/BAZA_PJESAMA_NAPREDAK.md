@@ -44,7 +44,7 @@ lokalno su bili u scratchpadu.
 - `tools/roundtrip.py izvor.pdf ... [--png DIR]` — dokaz: PDF→baza(JSON)→PDF→usporedba ✅
 - `songdb.py` — SQLite (songs, pending, imports), normalizacija, dedup ≥0.80, ChordPro ✅
   (fingerprint = semantički sadržaj bez izgleda; sličnost = difflib nad normaliziranim riječima teksta)
-- `songdb_web.py` — Blueprint: /baza (UI), /db/* (pisanje, opcionalno DB_PASSWORD),
+- `songdb_web.py` ✅ (registriran u app.py) — Blueprint: /baza (UI), /db/* (pisanje, opcionalno DB_PASSWORD),
   /api/v1/* (čitanje za druge aplikacije, opcionalno API_TOKEN, CORS)
 - docker-compose: volumen ./data:/app/data, env DB_PATH
 
@@ -62,7 +62,8 @@ Pjesma: title, key, subtitle, meta [{label, values}], sections, layout {profile}
 - [x] renderer + usporedba: **17/17 pjesama identično** (5 korisnikovih v2 + 12 iz klajanje v1,
       3744 glifa, max odstupanje 0.0025 pt; pikseli se razlikuju samo u zaglađivanju rubova)
 - [x] baza (testirano: uvoz 17, ponovni uvoz → duplikat, izmjena akorda → konflikt 100 %, replace)
-- [ ] UI/API (songdb_web.py Blueprint)  - [ ] testovi/docs/PR
+- [x] UI/API endpointi (test client OK) — sljedeće: test u pregledniku (playwright), lozinka/token,
+      docker volumen, pytest testovi, README/DEPLOY, PR
 
 ## Grana / PR
 Grana `claude/app-migration-hostinger-vps-q2z32b`, nova od main nakon PR #15.

@@ -339,9 +339,8 @@ def list_pending(conn):
         out.append({
             "id": p["id"], "similarity": p["similarity"], "created_at": p["created_at"],
             "source": json.loads(p["source"]),
-            "new": {"title": new["title"], "subtitle": new.get("subtitle") or "",
-                    "key": new.get("key") or "", "numbers": chord_extract.numbers(new),
-                    "chordpro": chord_extract.to_chordpro(new)},
+            "new": dict(new, numbers=chord_extract.numbers(new),
+                        chordpro=chord_extract.to_chordpro(new)),
             "existing": get_song(conn, p["existing_id"]),
         })
     return out

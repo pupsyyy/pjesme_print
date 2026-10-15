@@ -25,6 +25,7 @@ from pdf_to_word import (FONT_CHOICES, SECTION_LABELS, build_docx,
                          build_docx_compact, is_chord_line,
                          parse_pdf_detailed, song_compact_blocks)
 from pdf_writer import build_pdf, build_pdf_compact
+from songdb_web import bp as songdb_bp
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "50"))
 MAX_SONGS = 500
@@ -45,6 +46,7 @@ APP_VERSION = _read_version()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+app.register_blueprint(songdb_bp)          # /baza, /db/*, /api/v1/*
 
 
 # ── Pretvorbe: parsirana pjesma <-> polja u editoru ───────────────────────────
@@ -483,6 +485,11 @@ PAGE = r"""<!doctype html>
               border-radius: 10px; padding: .4rem .6rem; cursor: pointer;
               line-height: 1; transition: border-color .15s, background .15s; }
   #btnTheme:hover { border-color: var(--accent); }
+  .navlink { color: var(--text); text-decoration: none; font-family: var(--ui);
+             font-size: .85rem; font-weight: 500; background: var(--panel2);
+             border: 1px solid var(--border); border-radius: 10px; padding: .4rem .75rem;
+             transition: border-color .15s; white-space: nowrap; }
+  .navlink:hover { border-color: var(--accent); }
 
   main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .hidden { display: none !important; }
@@ -632,6 +639,7 @@ PAGE = r"""<!doctype html>
     <span class="sub">Ubaci PDF → uredi → novi PDF ili Word</span>
   </div>
   <span class="grow"></span>
+  <a class="navlink" href="baza" title="Baza pjesama s akordima — uvoz PDF-ova, pretraga, pjesmarice iz baze">🗂 Baza pjesama</a>
   <button id="btnTheme" title="Svijetla/tamna tema">☀️</button>
 </header>
 
@@ -1061,6 +1069,12 @@ window.addEventListener("beforeunload", e => {
   }
 });
 loadDraft();
+
+/* Dolazak iz baze pjesama ("Napravi pjesmaricu"): odmah otvori urednik */
+if (location.hash === "#nastavi" && readDraft()) {
+  history.replaceState(null, "", location.pathname + location.search);
+  $("btnResume").click();
+}
 
 /* PWA: registracija service workera (ne kešira ništa) */
 if ("serviceWorker" in navigator) {
