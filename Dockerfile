@@ -14,9 +14,14 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY pdf_to_word.py pdf_writer.py watermark.py app.py VERSION ./
+COPY pdf_to_word.py pdf_writer.py watermark.py app.py VERSION \
+     opensans.py chord_extract.py chord_render.py songdb.py songdb_web.py ./
 COPY assets/ ./assets/
 COPY static/ ./static/
+
+# Baza pjesama (SQLite) — u docker-compose.yml montirana kao ./data
+ENV DB_PATH=/app/data/pjesme.db
+RUN mkdir -p /app/data
 
 EXPOSE 8000
 

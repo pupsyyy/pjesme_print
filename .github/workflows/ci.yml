@@ -39,4 +39,7 @@ jobs:
             sleep 1
           done
           python3 -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health')); assert d['status']=='ok', d; print(d)"
+          # baza pjesama: stranica i API rade, SQLite se može napraviti u /app/data
+          curl -fsS http://127.0.0.1:8000/baza >/dev/null
+          python3 -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/v1')); assert d['songs']==0, d; print(d)"
           docker rm -f pj

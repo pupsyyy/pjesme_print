@@ -12,6 +12,17 @@ services:
       # - "8010:8000"
     environment:
       - MAX_UPLOAD_MB=50
+      - DB_PATH=/app/data/pjesme.db
+      # Lozinka za uvoz/brisanje u bazi pjesama i token za API drugih aplikacija.
+      # Upiši ih u datoteku .env pored ovog docker-compose.yml (ne ide u git):
+      #   DB_PASSWORD=nesto-tajno
+      #   API_TOKEN=dugi-nasumicni-token
+      - DB_PASSWORD=${DB_PASSWORD:-}
+      - API_TOKEN=${API_TOKEN:-}
+    volumes:
+      # Baza pjesama (SQLite) ostaje na serveru i kad se kontejner obnovi:
+      # /opt/pjesme_print/data/pjesme.db
+      - ./data:/app/data
     # Rotacija logova: da datoteka logova ne raste beskonačno (3 x 10 MB)
     logging:
       driver: json-file

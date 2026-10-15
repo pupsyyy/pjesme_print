@@ -15,7 +15,8 @@ import io
 import json
 import os
 
-from flask import Blueprint, Response, jsonify, make_response, request, send_file
+from flask import (Blueprint, Response, g, jsonify, make_response, request,
+                   send_file)
 
 import chord_extract
 import chord_render
@@ -25,7 +26,17 @@ bp = Blueprint("songdb", __name__)
 
 
 def _conn():
-    return songdb.connect()
+    """Jedna veza prema bazi po zahtjevu (zatvara se na kraju zahtjeva)."""
+    if "songdb_conn" not in g:
+        g.songdb_conn = songdb.connect()
+    return g.songdb_conn
+
+
+@bp.teardown_app_request
+def _close_conn(_exc):
+    conn = g.pop("songdb_conn", None)
+    if conn is not None:
+        conn.close()
 
 
 def _secret_ok(given, expected):
