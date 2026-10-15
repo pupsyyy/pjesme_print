@@ -1,6 +1,6 @@
 # Baza pjesama — dnevnik napretka (za nastavak rada ako sesija nestane)
 
-Zadnje ažuriranje: 2026-10-15 (sesija u tijeku)
+Zadnje ažuriranje: 2026-10-15 — značajka gotova, PR otvoren
 
 ## Zahtjev korisnika
 Upload PDF-ova → baza pjesama (SQLite): tekst, metapodaci (naslov, podnaslov/izvođač,
@@ -67,7 +67,22 @@ Pjesma: title, key, subtitle, meta [{label, values}], sections, layout {profile}
       zbog proxyja): uvoz, perzistencija nakon restarta, PDF iz kontejnera 5/5 identičan
 - [x] tests/test_songdb.py (58 testova ukupno prolazi; privatni PDF-ovi u tests/fixtures/private/ — gitignore)
 - [x] README (Baza pjesama + API), DEPLOY (podaci, .env, backup), print.caddy (/api/v1 bez basic_auth), VERSION 2026.10.15
-- [ ] PR + CI
+- [x] pregled koda: zaštita od lažnih stupaca, PDF bez naslova → jasna greška, nazivi datoteka bez dijakritika
+- [x] 61 test prolazi; UI s lozinkom testiran u pregledniku
+- [ ] PR + CI (draft PR otvoren — provjeriti CI, zatim spajanje i deploy na server)
+
+## Deploy na server (kad se PR spoji)
+```
+cd /opt/pjesme_print && git pull
+echo "DB_PASSWORD=..." > .env && echo "API_TOKEN=$(openssl rand -hex 24)" >> .env
+docker compose up -d --build
+# ako je basic_auth u /etc/caddy/print.caddy: matcher -> not path /health /api/v1*
+```
+
+## Ideje za dalje
+- uređivanje pjesme u bazi (tekst/akordi) iz /baza
+- transponiranje akorda
+- pjesmarice kao spremljeni popisi pjesama u bazi
 
 ## Grana / PR
 Grana `claude/app-migration-hostinger-vps-q2z32b`, nova od main nakon PR #15.
