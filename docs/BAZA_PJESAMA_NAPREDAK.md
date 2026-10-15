@@ -62,8 +62,12 @@ Pjesma: title, key, subtitle, meta [{label, values}], sections, layout {profile}
 - [x] renderer + usporedba: **17/17 pjesama identično** (5 korisnikovih v2 + 12 iz klajanje v1,
       3744 glifa, max odstupanje 0.0025 pt; pikseli se razlikuju samo u zaglađivanju rubova)
 - [x] baza (testirano: uvoz 17, ponovni uvoz → duplikat, izmjena akorda → konflikt 100 %, replace)
-- [x] UI/API endpointi (test client OK) — sljedeće: test u pregledniku (playwright), lozinka/token,
-      docker volumen, pytest testovi, README/DEPLOY, PR
+- [x] UI/API: test u pregledniku (playwright, desktop+mobitel, bez JS grešaka), lozinka/token OK
+- [x] Docker: volumen ./data, .env (DB_PASSWORD, API_TOKEN); slika testirana u sandboxu (bez apt
+      zbog proxyja): uvoz, perzistencija nakon restarta, PDF iz kontejnera 5/5 identičan
+- [x] tests/test_songdb.py (58 testova ukupno prolazi; privatni PDF-ovi u tests/fixtures/private/ — gitignore)
+- [x] README (Baza pjesama + API), DEPLOY (podaci, .env, backup), print.caddy (/api/v1 bez basic_auth), VERSION 2026.10.15
+- [ ] PR + CI
 
 ## Grana / PR
 Grana `claude/app-migration-hostinger-vps-q2z32b`, nova od main nakon PR #15.

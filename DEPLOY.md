@@ -65,6 +65,37 @@ Izvana je dostupna kroz reverse proxy na putanji domene, npr.
 > i otvori port 8010 na firewallu. Ako je 8010 zauzet, promijeni lijevi
 > broj porta (npr. `"8020:8000"`).
 
+### Baza pjesama — podaci, lozinka, API token, backup
+
+Baza je jedna SQLite datoteka **`/opt/pjesme_print/data/pjesme.db`**
+(montirana u kontejner kao `/app/data`), pa ostaje i kad se kontejner
+obnovi. Lozinka za uvoz/brisanje i token za druge aplikacije idu u
+datoteku `.env` pored `docker-compose.yml` (nije u gitu):
+
+```bash
+cd /opt/pjesme_print
+echo "DB_PASSWORD=upisi-svoju-lozinku" > .env
+echo "API_TOKEN=$(openssl rand -hex 24)" >> .env
+cat .env                       # zapiši token — trebat će drugim aplikacijama
+docker compose up -d --build
+```
+
+- `DB_PASSWORD` — stranica `/baza` pita lozinku kod prvog uvoza/brisanja
+  (pamti se u pregledniku). Čitanje je i dalje otvoreno.
+- `API_TOKEN` — druge aplikacije šalju `Authorization: Bearer <token>`.
+  Aplikacije na istom serveru mogu ići izravno na `http://127.0.0.1:8010/api/v1/...`.
+- Bez ovih varijabli sve radi bez lozinke (u redu ako je cijela stranica
+  iza Caddy `basic_auth`).
+
+**Backup** (dok aplikacija radi, sigurno):
+
+```bash
+docker compose exec pjesme python -c "import sqlite3; s=sqlite3.connect('/app/data/pjesme.db'); d=sqlite3.connect('/app/data/backup.db'); s.backup(d); d.close()"
+cp data/backup.db ~/pjesme-$(date +%F).db
+```
+
+ili `curl .../api/v1/export > pjesme.json` (sve pjesme kao JSON).
+
 ### Korisne naredbe
 
 ```bash
@@ -200,7 +231,8 @@ caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy
 ```
 
 Preglednik pita korisničko ime (`josip`) i lozinku jednom po uređaju;
-`/health` ostaje bez lozinke radi nadzora (npr. UptimeRobot).
+`/health` ostaje bez lozinke radi nadzora (npr. UptimeRobot), a
+`/api/v1/*` (API baze pjesama za druge aplikacije) štiti `API_TOKEN`.
 
 ### Nginx: putanja ili portal s loginom
 
