@@ -37,7 +37,7 @@ lokalno su bili u scratchpadu.
 
 ## Arhitektura (u izradi)
 - `opensans.py` — metrike/registracija fonta ✅
-- `chord_extract.py` — parser PDF → pjesme s akordima (indeksi) ⏳
+- `chord_extract.py` — parser PDF → pjesme s akordima (indeksi) ✅ (`python3 chord_extract.py x.pdf` ispiše ChordPro)
 - `chord_render.py` — iscrtavanje pjesme u izvornom izgledu (v2/v1 profil)
 - `chord_compare.py` — usporedba izvornog i rekreiranog PDF-a (glif po glif)
 - `songdb.py` — SQLite (songs, pending, imports), normalizacija, dedup ≥0.80, ChordPro
@@ -54,6 +54,7 @@ Pjesma: title, key, subtitle, meta [{label, values}], sections, layout {profile}
 
 ## Status
 - [x] analiza formata, font, pravila rasporeda
+- [x] parser chord_extract.py radi na svih 5 + klajanje (crtice uklonjene, v1 pomaknuti akordi → slovo ispod)
 - [ ] parser  - [ ] renderer + usporedba  - [ ] baza  - [ ] UI/API  - [ ] testovi/docs/PR
 
 ## Grana / PR
