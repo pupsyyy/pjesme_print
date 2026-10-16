@@ -144,3 +144,14 @@ PR #17 (Tabor) još nije spojen → nastavak na istoj grani.
 - [x] UI: traka oznaka (filter + "bez oznake" + ✨ Predloži), oznake u popisu, uređivanje na pjesmi,
       ☑ Sve + skupna oznaka; testirano u pregledniku (Playwright), 72 testa prolaze
 - [ ] PR #17 opis dopuniti, CI
+
+---
+# Faza 4 — note (notni zapis) uz pjesme (zahtjev 2026-10-16)
+"možeš li dati podršku da se imaju i note? da se odvojeno spremaju?" → notni zapis kao privitak.
+Plan: tablica attachments(song_id FK cascade, name, filename, stored, mime, kind, size, created_at);
+datoteke u <DB dir>/note/<uuid>.<ext> (izvan JSON-a pjesme); dopušteno PDF, PNG/JPG/WebP,
+MusicXML (.musicxml/.xml/.mxl), MuseScore (.mscz/.mscx), MIDI; provjera magic bajtova; SVG/HTML ne.
+Web: GET/POST /db/songs/<id>/notes, GET /db/notes/<aid>, PATCH (ime), DELETE; API /api/v1/notes/<aid>,
+song JSON "notes". Pisanje uz DB_PASSWORD. UI: sekcija 🎼 Note na pjesmi, 🎼 u popisu.
+MusicXML prikaz (OpenSheetMusicDisplay) NE sada — CDN nedostupan u sandboxu, ne može se testirati.
+PR #17 još otvoren → ista grana.
