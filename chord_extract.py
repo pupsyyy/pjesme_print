@@ -679,6 +679,7 @@ def extract(data, filename="", scores=True):
     groups = scorepages.group_pages(found)
     for g in groups:
         g["words"] = [w for p in g["pages"] for w in found[p]["words"]]
+        g["fp"] = "|".join(found[p]["fp"] for p in g["pages"])
     return {"songs": songs, "pages": n, "skipped": skipped, "warnings": warnings,
             "titled": titled, "scores": groups}
 

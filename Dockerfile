@@ -20,6 +20,16 @@ COPY *.py VERSION ./
 COPY assets/ ./assets/
 COPY static/ ./static/
 
+# Preglednik nota (MusicXML -> slika, transpozicija) — Verovio, LGPL; poslužuje
+# ga aplikacija sama (bez CDN-a). Ako preuzimanje ne uspije, stranica koristi CDN.
+ARG VEROVIO_VERSION=6.3.0
+RUN python -c "import io, sys, tarfile, urllib.request as u; \
+t = tarfile.open(fileobj=io.BytesIO(u.urlopen('https://registry.npmjs.org/verovio/-/verovio-' + sys.argv[1] + '.tgz', timeout=120).read())); \
+f = t.extractfile('package/dist/verovio-toolkit-wasm.js'); \
+import os; os.makedirs('static/vendor', exist_ok=True); \
+open('static/vendor/verovio-toolkit-wasm.js', 'wb').write(f.read())" "$VEROVIO_VERSION" \
+    || echo "Verovio nije preuzet — preglednik nota koristi CDN"
+
 # ── Neobavezno: prepoznavanje nota iz PDF-a/slike (Audiveris -> MusicXML) ─────
 # Uključi s WITH_OMR=1 u .env (docker-compose.yml ga prosljeđuje). Slika je
 # tada ~250 MB veća, a jedno prepoznavanje treba ~1 GB RAM-a. Bez toga

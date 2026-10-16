@@ -220,11 +220,13 @@ def _place_group(conn, name, data, sha, g, res, page_song, folder, tags):
         scorepages.title_from_filename(posixpath.basename(folder.path))
     target, new_title = _target(conn, g, res, page_song, folder, fallback)
     whole = len(g["pages"]) == res["pages"]
+    # ključ za "već imamo": sadržaj stranica, ne bajtovi PDF-a (ponovni izvoz
+    # istih nota ima drugi datum/ID, ali iste note)
+    key = _sha(("score:" + g["fp"]).encode())
     if whole:
-        content, key, fname = data, sha, base
+        content, fname = data, base
     else:
         content = scorepages.extract_pages(data, g["pages"])
-        key = _sha(f"{sha}:{g['pages']}".encode())
         fname = f"{stem} ({_pages_label(g['pages'])}).pdf"
     out = {"title": g["title"], "pages": g["pages"], "kind": g["kind"]}
     existing = conn.execute("SELECT a.song_id, s.title FROM attachments a JOIN songs s"

@@ -65,7 +65,8 @@ def parse(url):
         raise LinkError("Neispravan link.") from exc
     host = (u.hostname or "").lower()
     if u.scheme.lower() not in ("http", "https") or not host or "." not in host:
-        raise LinkError("Link mora počinjati s https:// (YouTube, Google disk ili audio datoteka).")
+        raise LinkError("To nije ispravan link — zalijepi cijelu adresu "
+                        "(YouTube, Google disk ili audio datoteka).")
     if u.username or u.password or re.search(r"[\s<>\"']", url):
         raise LinkError("Neispravan link.")
     q = parse_qs(u.query)

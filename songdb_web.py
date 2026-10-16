@@ -502,6 +502,16 @@ def api_export():
 
 # ── Stranica ──────────────────────────────────────────────────────────────────
 
+VEROVIO_CDN = "https://cdn.jsdelivr.net/npm/verovio@6.3.0/dist/verovio-toolkit-wasm.js"
+VEROVIO_LOCAL = "static/vendor/verovio-toolkit-wasm.js"
+
+
+def _verovio_url():
+    """Preglednik nota: lokalna kopija (Docker je preuzme pri izgradnji) ili CDN."""
+    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), VEROVIO_LOCAL)
+    return VEROVIO_LOCAL if os.path.isfile(local) else VEROVIO_CDN
+
+
 @bp.get("/baza")
 def page():
     from app import APP_VERSION, MAX_UPLOAD_MB
@@ -509,6 +519,7 @@ def page():
             .replace("__MAX_MB__", str(MAX_UPLOAD_MB))
             .replace("__NOTE_ACCEPT__", songnotes.ACCEPT)
             .replace("__OMR__", "true" if omr.available() else "false")
+            .replace("__VEROVIO_URL__", _verovio_url())
             .replace("__VOICES__", json.dumps(songlinks.VOICES, ensure_ascii=False)))
     resp = make_response(html)
     resp.headers["Cache-Control"] = "no-cache"
@@ -809,7 +820,7 @@ const state = { songs: [], total: 0, sel: new Set(), current: null, q: "", tag: 
                 hidden: new Set() };
 const PW_KEY = "pjesme-dbpw", DRAFT_KEY = "pjesme-draft", HIDDEN_KEY = "pjesme-hidden-tags";
 const OMR = __OMR__, VOICES = __VOICES__;
-const VEROVIO_URL = "https://cdn.jsdelivr.net/npm/verovio@6.3.0/dist/verovio-toolkit-wasm.js";
+const VEROVIO_URL = "__VEROVIO_URL__";
 try { state.hidden = new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]")); } catch (_e) {}
 
 function applyTheme(t) {
@@ -1159,7 +1170,7 @@ function renderNotes(s, jobs) {
       try { await json(await api(url + "/move", { method: "POST", headers: { "Content-Type": "application/json" },
                                                   body: JSON.stringify({ song_id: target.id }) }));
             toast("Note premještene na „" + target.title + "”.");
-            await refreshAll(); openSong(target.id); }
+            state.current = target.id; await refreshAll(); }
       catch (e) { toast(e.message, true); }
     });
     const x = el("button", "btn danger", "✕"); x.title = "Obriši note";
@@ -1178,6 +1189,7 @@ function renderNotes(s, jobs) {
 
 /* ── Snimke: YouTube po glasovima, Google disk, audio ── */
 const LINK_ICON = { youtube: "▶️", drive: "☁️", audio: "🎵", link: "🔗" };
+const LINK_KIND = { youtube: "YouTube", drive: "Google disk", audio: "audio datoteka", link: "link" };
 function renderLinks(s) {
   const box = el("div", "links");
   const head = el("div", "head");
@@ -1188,7 +1200,8 @@ function renderLinks(s) {
   links.forEach(l => {
     const row = el("div", "linkrow");
     row.append(el("span", "voice", (LINK_ICON[l.kind] || "🔗") + " " + (l.voice || "Snimka")));
-    row.append(el("span", "lt", l.title || l.url));
+    const lt = el("span", "lt", l.title || LINK_KIND[l.kind] || l.url); lt.title = l.url;
+    row.append(lt);
     const player = el("div", "player hidden");
     if (l.embed) {
       const play = el("button", "btn", "▶ Slušaj");

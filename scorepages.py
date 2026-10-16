@@ -263,7 +263,24 @@ def classify(page):
                and sum(ch["text"].isalpha() for ch in r) >= 3]
     kind = "mixed" if staves and len(outside) >= OUTSIDE_ROWS else "score"
     return {"kind": kind, "staves": len(staves), "zones": zones, "music_chars": music,
-            "title": header_title(page, staves)}
+            "title": header_title(page, staves), "fp": fingerprint(page, staves)}
+
+
+def fingerprint(page, staves):
+    """Otisak sadržaja stranice s notama (tekst, crtovlja, slike) — isti za isti
+    notni zapis i kad je PDF ponovo izvezen (drugi datum, ID...)."""
+    import hashlib  # noqa: PLC0415
+
+    h = hashlib.sha256()
+    h.update(" ".join((page.extract_text() or "").split()).encode())
+    h.update(repr([(round(s["top"]), round(s["bottom"]), round(s["x0"]), round(s["x1"]))
+                   for s in staves]).encode())
+    for im in page.images:
+        try:
+            h.update(hashlib.sha256(im["stream"].get_rawdata() or b"").digest())
+        except Exception:  # noqa: BLE001
+            h.update(repr((round(im["x0"]), round(im["top"]), im.get("srcsize"))).encode())
+    return h.hexdigest()
 
 
 def _row_text(row):
