@@ -107,3 +107,12 @@ Izvor: Google Drive "TABOR PJESMARICA 2017.pdf" (fileId 1rhycukB6t1ut1qY3kdt4aHI
 
 Pravilo duplikata (korisnik 2026-10-16): "ako već imamo pjesmu ne dodajemo je, samo one koje nemamo"
 → tekst ≥ 95 % isti = već imamo (preskoči tiho), 80–95 % = pitaj, < 80 % = dodaj.
+
+## Status faze 2
+- [x] songbook_word.py: Tabor 109/109 pjesama, 2250/2250 akorda i 7483/7483 riječi sačuvano
+      (provjera: svaki crveni token i svaka riječ sa stranice je u pjesmi), 5.7 s za 110 str.
+- [x] sidrenje: najbliži početak SLOVA (ne interpunkcije), izjednačenje → lijevo
+      (kalibrirano na str. 2, 3, 16; vizualna usporedba str. 2, 3, 16, 31, 42, 85 OK)
+- [x] kurziv iz Worda = nagib u matrici (m[2] ≈ 0.33·size); istaknuta sekcija → "Refren" (64/109)
+- [x] renderer: podebljani/kurzivni redci s akordima (OpenSans-Italic 1.10 dodan), najviše 1 vidljiva crtica
+- [ ] pravilo duplikata ≥95 % + skupna odluka   - [ ] testovi Word formata   - [ ] PR

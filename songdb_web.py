@@ -95,14 +95,15 @@ def db_import():
                    else "PDF se ne može pročitati.")
             reports.append({"file": name, "error": msg})
             continue
-        if not res["songs"]:
+        if not res["songs"] and len(res["skipped"]) == res["pages"]:
             reports.append({"file": name, "error": "U PDF-u nema teksta pjesama "
                             "(skenirani PDF?).", "warnings": res["warnings"]})
             continue
-        if not res["titled"]:
+        if not res["songs"] or not res["titled"]:
             reports.append({"file": name, "error": "U PDF-u nisu prepoznate pjesme "
-                            "(nema naslova). Baza prima PDF-ove izvezene iz aplikacije "
-                            "za pjesmarice — jedna pjesma po stranici, naslov na vrhu."})
+                            "(nema naslova). Baza prima PDF-ove iz aplikacije za "
+                            "pjesmarice i pjesmarice iz Worda — pjesma s naslovom na "
+                            "vrhu stranice, akordi u retku iznad teksta."})
             continue
         rep = songdb.import_songs(conn, res["songs"], name,
                                   hashlib.sha256(data).hexdigest(), res["pages"])

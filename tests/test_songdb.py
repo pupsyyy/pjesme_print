@@ -407,3 +407,16 @@ def test_download_names_without_diacritics():
     from songdb_web import _ascii_name
     assert _ascii_name("Aleluja (Bože svet si ) – Đurđevak") == "Aleluja_Boze_svet_si_Durdevak"
     assert _ascii_name("!!!") == "pjesma"
+
+
+def test_crowded_chords_one_visible_hyphen_roundtrip():
+    song = _song_v2()
+    song["sections"] = [{"label": None, "lines": [
+        {"text": "Kada jezike bih sve govorio a ljubavi", "chords": [[0, "G"], [24, "Gsus4"], [26, "C"], [28, "Gmaj7"]]}]}]
+    text, _extra, _placed = chord_render.layout_pair(
+        song["sections"][0]["lines"][0]["text"], song["sections"][0]["lines"][0]["chords"], 12,
+        chord_extract.PROFILES["v2"])
+    assert text.count("-") <= 2 and "--" not in text
+    pdf1, back, pdf2 = _roundtrip(song)
+    assert chord_compare.compare(pdf1, pdf2)["identical"]
+    assert back["sections"][0]["lines"] == song["sections"][0]["lines"]

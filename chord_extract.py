@@ -180,22 +180,24 @@ def _rows(glyphs):
 # ── Rekonstrukcija teksta retka ───────────────────────────────────────────────
 
 def _split_gap(gap, sw, hw, first, spacers):
-    """Razmak između riječi -> (broj razmaka, broj nevidljivih crtica)."""
+    """Razmak između riječi -> (broj razmaka, broj nevidljivih crtica).
+
+    Prvo se pokušaju samo razmaci; nevidljive crtice (v2, ispred akorda koji
+    nema mjesta) dolaze u obzir tek ako razmaci ne objašnjavaju razmak.
+    """
     if gap <= 0.35 * sw:
         return 0, 0
-    best = None
-    for m in range(0, 4 if spacers else 1):
+    for m in range(0, 41 if spacers else 1):
         rest = gap - m * hw
+        if rest < -0.03:
+            break
         n = round(rest / sw)
-        if n < (0 if first else 1) and not (m and n == 0 and not first):
+        if n < 0 or (n == 0 and m == 0):
             continue
-        err = abs(rest - n * sw)
-        if best is None or err < best[0] - 0.02:
-            best = (err, n, m)
-    if best is None or best[0] > 0.3 * sw:
-        n = round(gap / sw)
-        return (max(1, n) if not first else n), 0
-    return best[1], best[2]
+        if abs(rest - n * sw) < 0.03:
+            return n, m
+    n = round(gap / sw)
+    return (max(1, n) if not first else n), 0
 
 
 def proportional_text(row, left, spacers=False):
@@ -583,12 +585,21 @@ def songs_from_pages(pages, filename=""):
     for pno, pg in pages:
         if pg is None:
             continue
+        has_chords = any(ln.get("chords") for b in pg["blocks"] for ln in b["lines"])
+        if pg.get("format") == "word" and not pg["title"] and not has_chords \
+                and (not songs or not pg["blocks"] or pno == 1):
+            # naslovnica, sadržaj i sl. u pjesmarici iz Worda — nije pjesma
+            warnings.append(f"Stranica {pno} preskočena (nije pjesma).")
+            continue
         if pg["title"] or not songs:
             if not pg["title"]:
                 warnings.append(f"Stranica {pno}: nema naslova pjesme.")
+            layout = {"profile": pg["profile"]}
+            if pg.get("format"):
+                layout["source_format"] = pg["format"]
             song = {"title": pg["title"] or "(bez naslova)", "key": pg["key"] or "",
-                    "subtitle": "\n".join(pg["subtitle"]), "meta": [],
-                    "sections": [], "layout": {"profile": pg["profile"]},
+                    "subtitle": "\n".join(pg["subtitle"]), "meta": list(pg.get("meta") or []),
+                    "sections": [], "layout": layout,
                     "source": {"file": filename, "pages": [pno]}}
             songs.append(song)
             in_header = True
@@ -625,11 +636,16 @@ def songs_from_pages(pages, filename=""):
 
 def extract(data, filename=""):
     """PDF (bytes) -> {"songs": [...], "pages": n, "skipped": [...], "warnings": [...]}"""
+    import songbook_word  # noqa: PLC0415 — izbjegava kružni import
+
     pages, skipped = [], []
     with pdfplumber.open(io.BytesIO(data)) as pdf:
         n = len(pdf.pages)
         for i, page in enumerate(pdf.pages, start=1):
-            pg = parse_page(page)
+            if songbook_word.looks_like_word_page(page):
+                pg = songbook_word.parse_page(page)      # pjesmarica iz Worda
+            else:
+                pg = parse_page(page)                    # izvoz aplikacije
             if pg is None:
                 skipped.append(i)
             pages.append((i, pg))

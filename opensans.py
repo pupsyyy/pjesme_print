@@ -13,6 +13,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 FONT_DIR = Path(__file__).with_name("assets") / "fonts"
 REGULAR = "OpenSans110"
 BOLD = "OpenSans110-Bold"
+ITALIC = "OpenSans110-Italic"
 
 # Vertikalne metrike fonta (hhea): ascent 2189, descent 600, unitsPerEm 2048
 ASCENT = 2189 / 2048
@@ -30,11 +31,24 @@ def register():
     if not _registered:
         pdfmetrics.registerFont(TTFont(REGULAR, str(FONT_DIR / "OpenSans-Regular.ttf")))
         pdfmetrics.registerFont(TTFont(BOLD, str(FONT_DIR / "OpenSans-Bold.ttf")))
+        pdfmetrics.registerFont(TTFont(ITALIC, str(FONT_DIR / "OpenSans-Italic.ttf")))
         _registered = True
     return REGULAR, BOLD
 
 
+def font_name(style):
+    """style: True/"bold" -> bold, "italic" -> kurziv, inače regular."""
+    if style is True or style == "bold":
+        return BOLD
+    if style == "italic":
+        return ITALIC
+    return REGULAR
+
+
 def width(text, bold, size):
-    """Točna širina teksta u pt (bez kerninga, kao izvorna aplikacija)."""
+    """Točna širina teksta u pt (bez kerninga, kao izvorna aplikacija).
+
+    bold: True/False ili "bold" / "italic" / "regular".
+    """
     register()
-    return pdfmetrics.stringWidth(text, BOLD if bold else REGULAR, size)
+    return pdfmetrics.stringWidth(text, font_name(bold), size)
