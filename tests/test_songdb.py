@@ -233,7 +233,8 @@ def test_import_duplicate_conflict_resolve(conn):
     s = songdb.get_song(conn, sid)
     assert s["sections"][-1]["label"] == "Verse 2"
     assert [x["file"] for x in s["sources"]] == ["a.pdf", "b.pdf", "c.pdf", "d.pdf"]
-    assert songdb.stats(conn) == {"songs": 1, "pending": 0, "imports": 5}
+    assert songdb.stats(conn) == {"songs": 1, "pending": 0, "imports": 5,
+                                  "notes": 0, "links": 0, "notes_only": 0}
     assert songdb.resolve(conn, c["pending_id"], "replace") is None
 
 
@@ -299,7 +300,8 @@ def test_search_and_delete_cascade(conn):
     songdb.import_songs(conn, [_longer(song)], "b.pdf")
     assert songdb.stats(conn)["pending"] == 1
     assert songdb.delete_song(conn, sid)
-    assert songdb.stats(conn) == {"songs": 0, "pending": 0, "imports": 2}
+    assert songdb.stats(conn) == {"songs": 0, "pending": 0, "imports": 2,
+                                  "notes": 0, "links": 0, "notes_only": 0}
 
 
 def test_song_from_db_renders_identically(conn):
@@ -481,7 +483,8 @@ def test_web_resolve_all(client):
     assert client.post("/db/pending/all", json={"action": "nista"}).status_code == 400
     r = client.post("/db/pending/all", json={"action": "keep_existing"})
     assert r.get_json()["resolved"] == 2
-    assert client.get("/db/stats").get_json() == {"songs": 1, "pending": 0, "imports": 2}
+    assert client.get("/db/stats").get_json() == {"songs": 1, "pending": 0, "imports": 2,
+                                                 "notes": 0, "links": 0, "notes_only": 0}
 
 
 def test_migration_adds_pending_reason(tmp_path):

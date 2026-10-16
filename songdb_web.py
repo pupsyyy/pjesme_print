@@ -9,7 +9,6 @@ Web dio baze pjesama (Flask Blueprint):
                         zadan; CORS dopušten)
 """
 
-import hashlib
 import hmac
 import io
 import json
@@ -23,7 +22,10 @@ from flask import (Blueprint, Response, g, jsonify, make_response, request,
 import chord_extract
 import chord_render
 import songdb
+import songimport
+import songlinks
 import songnotes
+import songtags
 
 bp = Blueprint("songdb", __name__)
 
@@ -68,50 +70,21 @@ def _pdf_response(data, name, inline=False):
 
 # ── Uvoz ──────────────────────────────────────────────────────────────────────
 
-def _is_password_error(exc):
-    msg = (str(exc) + " " + type(exc).__name__).lower()
-    return "password" in msg or "encrypt" in msg
-
-
 @bp.post("/db/import")
 def db_import():
     denied = _require_write()
     if denied:
         return denied
-    files = request.files.getlist("pdf")
+    files = request.files.getlist("pdf") + request.files.getlist("file")
     if not files:
-        return jsonify(error="Nije poslan nijedan PDF."), 400
+        return jsonify(error="Nije poslan nijedan PDF ni ZIP."), 400
     conn = _conn()
+    tags = [songdb.tag_name(conn, t)
+            for t in songtags.parse_tag_input(request.form.get("tags", ""))]
     reports = []
     for f in files:
-        name = os.path.basename(f.filename or "dokument.pdf")
-        data = f.read()
-        if not data.startswith(b"%PDF"):
-            reports.append({"file": name, "error": "Nije PDF datoteka."})
-            continue
-        try:
-            res = chord_extract.extract(data, name)
-        except Exception as exc:  # noqa: BLE001 — poruka korisniku, ne 500
-            msg = ("PDF je zaštićen lozinkom." if _is_password_error(exc)
-                   else "PDF se ne može pročitati.")
-            reports.append({"file": name, "error": msg})
-            continue
-        if not res["songs"] and len(res["skipped"]) == res["pages"]:
-            reports.append({"file": name, "error": "U PDF-u nema teksta pjesama "
-                            "(skenirani PDF?).", "warnings": res["warnings"]})
-            continue
-        if not res["songs"] or not res["titled"]:
-            reports.append({"file": name, "error": "U PDF-u nisu prepoznate pjesme "
-                            "(nema naslova). Baza prima PDF-ove iz aplikacije za "
-                            "pjesmarice i pjesmarice iz Worda — pjesma s naslovom na "
-                            "vrhu stranice, akordi u retku iznad teksta."})
-            continue
-        rep = songdb.import_songs(conn, res["songs"], name,
-                                  hashlib.sha256(data).hexdigest(), res["pages"])
-        rep["warnings"] = res["warnings"]
-        rep["pages"] = res["pages"]
-        reports.append(rep)
-    return jsonify(reports=reports, stats=songdb.stats(conn))
+        reports.extend(songimport.import_upload(conn, f.filename or "dokument.pdf", f.read(), tags))
+    return jsonify(reports=reports, tags=tags, stats=songdb.stats(conn))
 
 
 # ── Čitanje (stranica) ────────────────────────────────────────────────────────

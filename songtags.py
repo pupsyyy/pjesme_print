@@ -31,6 +31,15 @@ DEFAULT_TAGS = [
     ("Kroz godinu", "vrijeme kroz godinu"),
 ]
 
+# Oznake ZBIRKI (ne liturgije): pjesme koje dolaze iz jednog izvora/repertoara,
+# npr. uvoz cijele pjesmarice pučkih pjesama ili repertoara velikog zbora koji
+# nam inače ne treba. Dodjeljuju se pri uvozu (#pucke...) i mogu se sakriti.
+COLLECTION = "zbirka"
+COLLECTION_TAGS = [
+    ("Pučke pjesme", "tradicionalne pučke crkvene pjesme"),
+    ("Veliki zbor", "repertoar velikog zbora"),
+]
+
 _TRANS = str.maketrans({"đ": "d", "Đ": "d", "č": "c", "Č": "c", "ć": "c", "Ć": "c",
                         "š": "s", "Š": "s", "ž": "z", "Ž": "z"})
 
@@ -131,3 +140,27 @@ def suggest(song, source_names=()):
 
     order = {name: i for i, (name, _d) in enumerate(DEFAULT_TAGS)}
     return sorted(tags, key=lambda t: (order.get(t, 99), t))
+
+
+def tag_key(name):
+    """Ključ za uspoređivanje naziva oznaka: "#pučkepjesme" == "Pučke pjesme"."""
+    return re.sub(r"[^a-z0-9]", "", _n(name))
+
+
+def parse_tag_input(text):
+    """'#pučkepjesme #velikizbor' ili 'Pučke pjesme, Veliki zbor' -> nazivi.
+
+    S # se svaka riječ iza # uzima kao jedna oznaka (bez razmaka); bez # se
+    nazivi odvajaju zarezom ili točkom-zarezom."""
+    text = (text or "").strip()
+    if "#" in text:
+        names = re.findall(r"#([^\s#,;]+)", text)
+    else:
+        names = re.split(r"[,;\n]+", text)
+    out, seen = [], set()
+    for n in names:
+        n = " ".join(n.split())[:40]
+        if n and tag_key(n) and tag_key(n) not in seen:
+            seen.add(tag_key(n))
+            out.append(n)
+    return out

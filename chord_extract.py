@@ -636,14 +636,28 @@ def songs_from_pages(pages, filename=""):
     return songs, warnings
 
 
-def extract(data, filename=""):
-    """PDF (bytes) -> {"songs": [...], "pages": n, "skipped": [...], "warnings": [...]}"""
+def extract(data, filename="", scores=True):
+    """PDF (bytes) -> {"songs": [...], "pages": n, "skipped": [...], "warnings": [...],
+    "scores": [...]}
+
+    scores: stranice s notama (scorepages.py) se ne čitaju kao tekst, nego se
+    vraćaju kao komadi nota {"pages", "title", "kind", "words"}; na "mixed"
+    stranici (note + kitice) čita se tekst izvan nota."""
+    import scorepages  # noqa: PLC0415
     import songbook_word  # noqa: PLC0415 — izbjegava kružni import
 
-    pages, skipped = [], []
+    pages, skipped, found = [], [], {}
     with pdfplumber.open(io.BytesIO(data)) as pdf:
         n = len(pdf.pages)
         for i, page in enumerate(pdf.pages, start=1):
+            info = scorepages.classify(page) if scores else None
+            if info:
+                info["words"] = scorepages.lyric_words(page, info)
+                found[i] = info
+                if info["kind"] == "score":
+                    pages.append((i, None))
+                    continue
+                page = scorepages.text_only(page, info)
             if songbook_word.looks_like_word_page(page):
                 pg = songbook_word.parse_page(page)      # pjesmarica iz Worda
             else:
@@ -653,11 +667,20 @@ def extract(data, filename=""):
             pages.append((i, pg))
     songs, warnings = songs_from_pages(pages, filename)
     titled = sum(1 for _i, pg in pages if pg and pg["title"])
+    for song in songs:
+        # pjesma s "mixed" stranice bez naslova u tekstu: naslov iznad nota
+        first = (song.get("source") or {}).get("pages", [None])[0]
+        if song["title"] == "(bez naslova)" and found.get(first, {}).get("title"):
+            song["title"] = found[first]["title"]
+            titled += 1
     if skipped:
         warnings.append("Bez teksta (sken?) — preskočene stranice: "
                         + ", ".join(map(str, skipped)) + ".")
+    groups = scorepages.group_pages(found)
+    for g in groups:
+        g["words"] = [w for p in g["pages"] for w in found[p]["words"]]
     return {"songs": songs, "pages": n, "skipped": skipped, "warnings": warnings,
-            "titled": titled}
+            "titled": titled, "scores": groups}
 
 
 # ── Pomoćno: tekst pjesme, ChordPro, "akordi iznad teksta" ────────────────────

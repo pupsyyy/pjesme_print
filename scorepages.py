@@ -263,7 +263,31 @@ def classify(page):
                and sum(ch["text"].isalpha() for ch in r) >= 3]
     kind = "mixed" if staves and len(outside) >= OUTSIDE_ROWS else "score"
     return {"kind": kind, "staves": len(staves), "zones": zones, "music_chars": music,
-            "title": header_title(page, staves) if kind == "score" else ""}
+            "title": header_title(page, staves)}
+
+
+def _row_text(row):
+    row = sorted(row, key=lambda c: c["x0"])
+    text, prev = "", None
+    for c in row:
+        if prev is not None and c["x0"] - prev["x1"] > 0.15 * c["size"]:
+            text += " "
+        text += c["text"]
+        prev = c
+    return " ".join(_CID.sub("", text).split())
+
+
+def lyric_words(page, info):
+    """Tekst ispod nota (slogovi spojeni: "naj-lje-pše" -> "najljepše") za
+    prepoznavanje pjesme kojoj note pripadaju. Na skenu nema teksta -> []."""
+    zones = info["zones"]
+    chars = [c for c in page.chars if not is_music_font(c["fontname"])
+             and _in_zones(c["bottom"], zones)]
+    out = []
+    for row in _text_rows(chars):
+        text = re.sub(r"\s*[-–]\s*", "", _row_text(row))
+        out.extend(w for w in text.split() if any(ch.isalpha() for ch in w))
+    return out
 
 
 def text_only(page, info):
@@ -292,15 +316,8 @@ def header_title(page, staves):
     body = statistics.median(c["size"] for c in visible)
     best = None
     for row in _text_rows([c for c in chars if c["bottom"] <= limit]):
-        row.sort(key=lambda c: c["x0"])
         size = statistics.median(c["size"] for c in row)
-        text, prev = "", None
-        for c in row:
-            if prev is not None and c["x0"] - prev["x1"] > 0.15 * c["size"]:
-                text += " "
-            text += c["text"]
-            prev = c
-        text = " ".join(_CID.sub("", text).split())
+        text = _row_text(row)
         if sum(ch.isalpha() for ch in text) < 3:
             continue
         if best is None or size > best[0] + 0.5:
@@ -314,7 +331,8 @@ def header_title(page, staves):
 
 _NOISE = re.compile(
     r"\b(full ?score|score|partitura|parts?|note|notni zapis|sheet ?music|satb|ssa|ttbb|"
-    r"zbor|choir|klavir|piano|orgulje|organ|final|v\d+)\b", re.IGNORECASE)
+    r"zbor|choir|klavir|piano|orgulje|organ|final|sken|skenirano|scan|scanned|v\d+)\b",
+    re.IGNORECASE)
 
 
 def title_from_filename(name):

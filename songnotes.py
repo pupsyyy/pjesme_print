@@ -65,10 +65,15 @@ CREATE TABLE IF NOT EXISTS attachments (
     mime        TEXT NOT NULL,
     kind        TEXT NOT NULL,
     size        INTEGER NOT NULL,
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    sha256      TEXT NOT NULL DEFAULT '',
+    origin      TEXT NOT NULL DEFAULT 'upload',
+    source      TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS attachments_song ON attachments(song_id);
 """
+# origin: upload (dodano ručno), import (stranice iz uvezenog PDF-a/ZIP-a),
+#         omr (MusicXML prepoznat iz drugih nota — vidi omr.py)
 
 
 class NoteError(ValueError):
