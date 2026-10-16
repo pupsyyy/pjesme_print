@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import chord_extract
+import omr
 import songlinks
 import songnotes
 import songtags
@@ -124,6 +125,7 @@ def connect(path=None):
     conn.executescript(songnotes.SCHEMA)
     conn.executescript(songlinks.SCHEMA)
     _migrate(conn)
+    conn.executescript(omr.SCHEMA)
     conn.db_file = None if str(path) == ":memory:" else path
     return conn
 

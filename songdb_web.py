@@ -21,6 +21,7 @@ from flask import (Blueprint, Response, g, jsonify, make_response, request,
 
 import chord_extract
 import chord_render
+import omr
 import songdb
 import songimport
 import songlinks
@@ -104,9 +105,10 @@ def db_stats():
 @bp.get("/db/songs")
 def db_songs():
     q = request.args.get("q", "")
+    exclude = [x for v in request.args.getlist("exclude") for x in v.split(",")]
     return jsonify(songdb.list_songs(_conn(), q, _int_arg("limit", 200, 1, 1000),
                                      _int_arg("offset", 0, 0, 10**9),
-                                     tag=request.args.get("tag") or None))
+                                     tag=request.args.get("tag") or None, exclude=exclude))
 
 
 @bp.get("/db/tags")
@@ -248,6 +250,83 @@ def db_note_delete(note_id):
     return jsonify(ok=True) if ok else (jsonify(error="Note ne postoje."), 404)
 
 
+@bp.post("/db/notes/<int:note_id>/move")
+def db_note_move(note_id):
+    """Premjesti note na drugu pjesmu (pogrešno pridružene pri uvozu)."""
+    denied = _require_write()
+    if denied:
+        return denied
+    try:
+        target = int((request.get_json(silent=True) or {}).get("song_id"))
+    except (TypeError, ValueError):
+        return jsonify(error="Odaberi pjesmu."), 400
+    ok = songdb.move_note(_conn(), note_id, target)
+    return jsonify(ok=True) if ok else (jsonify(error="Note ili pjesma ne postoje."), 404)
+
+
+# ── Prepoznavanje nota (OMR, neobavezno) ─────────────────────────────────────
+
+@bp.post("/db/notes/<int:note_id>/omr")
+def db_note_omr(note_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    try:
+        job = omr.enqueue(_conn(), note_id)
+    except omr.OmrError as exc:
+        return jsonify(error=str(exc)), (503 if not omr.available() else 400)
+    return jsonify(job=job)
+
+
+@bp.get("/db/omr/<int:job_id>")
+def db_omr_job(job_id):
+    job = omr.get_job(_conn(), job_id)
+    return jsonify(job=job) if job else (jsonify(error="Posao ne postoji."), 404)
+
+
+@bp.get("/db/songs/<int:song_id>/omr")
+def db_song_omr(song_id):
+    return jsonify(available=omr.available(), jobs=omr.jobs_for_song(_conn(), song_id))
+
+
+# ── Snimke (YouTube po glasovima, Google disk, audio) ─────────────────────────
+
+@bp.post("/db/songs/<int:song_id>/links")
+def db_link_add(song_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    d = request.get_json(silent=True) or {}
+    conn = _conn()
+    try:
+        link = songdb.add_link(conn, song_id, str(d.get("url") or ""), str(d.get("voice") or ""),
+                               str(d.get("title") or ""))
+    except songlinks.LinkError as exc:
+        return jsonify(error=str(exc)), 400
+    if link is None:
+        return jsonify(error="Pjesma ne postoji."), 404
+    return jsonify(link=link, links=songdb.list_links(conn, song_id))
+
+
+@bp.patch("/db/links/<int:link_id>")
+def db_link_update(link_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    d = request.get_json(silent=True) or {}
+    ok = songdb.update_link(_conn(), link_id, d.get("voice"), d.get("title"))
+    return jsonify(ok=True) if ok else (jsonify(error="Snimka ne postoji."), 404)
+
+
+@bp.delete("/db/links/<int:link_id>")
+def db_link_delete(link_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    ok = songdb.delete_link(_conn(), link_id)
+    return jsonify(ok=True) if ok else (jsonify(error="Snimka ne postoji."), 404)
+
+
 @bp.get("/db/pending")
 def db_pending():
     return jsonify(items=songdb.list_pending(_conn()))
@@ -377,7 +456,7 @@ def _api_cors(resp):
 @bp.get("/api/v1")
 def api_index():
     return jsonify(name="Pjesmarica — baza pjesama", **songdb.stats(_conn()),
-                   endpoints=["/api/v1/songs?q=&tag=&limit=&offset=", "/api/v1/tags",
+                   endpoints=["/api/v1/songs?q=&tag=&exclude=&limit=&offset=", "/api/v1/tags",
                               "/api/v1/songs/<id>", "/api/v1/notes/<id>",
                               "/api/v1/songs/<id>.cho", "/api/v1/songs/<id>.pdf",
                               "/api/v1/export"])
@@ -428,7 +507,9 @@ def page():
     from app import APP_VERSION, MAX_UPLOAD_MB
     html = (DB_PAGE.replace("__VERSION__", APP_VERSION)
             .replace("__MAX_MB__", str(MAX_UPLOAD_MB))
-            .replace("__NOTE_ACCEPT__", songnotes.ACCEPT))
+            .replace("__NOTE_ACCEPT__", songnotes.ACCEPT)
+            .replace("__OMR__", "true" if omr.available() else "false")
+            .replace("__VOICES__", json.dumps(songlinks.VOICES, ensure_ascii=False)))
     resp = make_response(html)
     resp.headers["Cache-Control"] = "no-cache"
     return resp
