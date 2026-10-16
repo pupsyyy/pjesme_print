@@ -163,3 +163,51 @@ PR #17 još otvoren → ista grana.
       /api/v1/notes/<id>; inline samo PDF/slike, nosniff; pisanje uz DB_PASSWORD
 - [x] UI: sekcija 🎼 Note (sličice, Otvori, ⬇, ✎, ✕), 🎼 u popisu; Playwright OK; 76 testova
 - [x] README/DEPLOY (backup data/note)
+
+---
+# Faza 5 — note iz PDF-a (A) + prepoznavanje nota (B), ZIP, oznake zbirki, snimke (2026-10-16)
+Zahtjevi korisnika:
+- "dali ima podrška da note čita iz pdf-a?" → "a, ali ostavi podršku i za B"
+  A = stranice s notama iz PDF-a spremi kao note uz pjesmu; B = OMR (Audiveris) → MusicXML
+- "print.josip.cloud podržava i da zip priložim (više pdf-ova od jednom); mogu imati samo tekst,
+  tekst + akorde, tekst + note, tekst + akorde + note"
+- "dodaj podršku za tag #pučkepjesme #velikizbor pa ako budem dodavao više pjesama (koje nam neće trebati)"
+- "dodaj podršku da mogu dodati link s youtube-a po glasovima ili link za audio file s google diska"
+Korisnikov primjer: "Isus Najljepše ime - Full Score.pdf" (Sibelius 7.5, SATB, 2 str., 3 kitice, akordi).
+
+## Što je napravljeno
+- scorepages.py: notna stranica = crtovlja (5/6 jednako razmaknutih crta; vektor: lines/rects/curves,
+  spajanje komada, druge crte između ne smetaju) ili ≥40 znakova notnog fonta, ili crtovlja na slici
+  (8 uskih pruga, projekcija redaka, zbroj sa susjednim retkom, 1 crta smije nedostajati, potvrda u 2 pruge).
+  "mixed" = note + ≥3 retka teksta izvan pojasa nota → tekst se čita bez nota, stranica ide i kao note.
+  Naslov iznad prvog crtovlja (najveća slova), riječi ispod nota (slogovi spojeni), otisak sadržaja.
+  Provjera: korisnikov Sibelius 8+4 crtovlja, naslov OK; sken (zakrenut 0,4°, šum, JPEG) 8/8;
+  Verovio vektor 8/8; Tabor 110 str., Misa*, klajanje, Aleluja* — 0 lažnih.
+- songimport.py: PDF / ZIP / datoteka nota. Note idu uz: pjesmu iz istog PDF-a (jedna pjesma, susjedna
+  stranica, mixed) → bazu po naslovu (strože: "Aleluja" ≠ "Aleluja (…)") ili tekstu ispod nota →
+  jedinu pjesmu iz iste mape ZIP-a → inače NOVA pjesma samo s notama (popuni se tekstom kad stigne PDF
+  istog naslova; add_song → _notes_only_song → _replace). Duplikat nota = isti sadržaj stranica.
+- oznake zbirki: tags.grp ("" / "zbirka"), COLLECTION_TAGS Pučke pjesme + Veliki zbor, #hashtag →
+  postojeća oznaka (tag_key bez razmaka/dijakritika); oznake pri uvozu samo NOVIM pjesmama (i sličnoj
+  kad se zadrži kao nova); list_songs(exclude=…), UI 👁 sakrij (localStorage).
+- snimke: songlinks.py (YouTube watch/youtu.be/shorts/embed/live/playlist, t=, Google disk file/d|open?id,
+  audio .mp3…, ostalo link), tablica song_links (voice, title, url, kind), UI player (youtube-nocookie,
+  drive /preview, <audio>), API "links".
+- omr.py: Audiveris 5.11.0 (deb, ubuntu24.04, raspakiran dpkg-deb -x u python:3.12-slim/trixie) +
+  tessdata 4.1.0 hrv+eng; posao u pozadini (omr_jobs, nit, flock — jedan u kontejneru), rezultat .mxl
+  (origin omr). Potrebno: fontconfig + fontovi, GDK_SCALE=1 (inače traži GTK), dpi prema veličini
+  stranice (Audiveris odbija > 20 Mpx), velike fotografije se smanje. Docker: WITH_OMR=1 (.env).
+  Izmjereno: korisnikov PDF 2 str. → 32–36 s, ~960 MB RAM; slika +354 MB.
+  Točnost na korisnikovom PDF-u: dionice, ključ, 6/8, note gotovo sve točne, 3 kitice teksta,
+  akordi u 2. sustavu; greške: "SUS", lažni "p", dio akorda u 1. sustavu → ispravci u MuseScoreu.
+- Verovio 6.3.0 (preglednik MusicXML + transpozicija ±6): Docker ga preuzme s npm-a u static/vendor,
+  CDN rezerva. UI: 🔍 Prepoznaj (status, osvježavanje), ▶ Prikaži, ⇄ premjesti, "samo note" značka.
+- CI: novi posao docker-omr (WITH_OMR=1 build → uvoz tests/fixtures/ljestvica.pdf → OMR mora uspjeti).
+- gunicorn --timeout 900, MAX_UPLOAD_MB 200 (ZIP).
+
+## Status faze 5
+- [x] A (note iz PDF-a), B (OMR), ZIP, oznake zbirki, snimke — backend + UI + 92 testa
+- [x] Playwright: uvoz nota (#velikizbor), ZIP (#pučkepjesme), sakrij zbirku, snimke + player,
+      OMR u pregledniku (36 s), prikaz + transpozicija, premještanje nota
+- [x] Docker sandbox: WITH_OMR=1 slika, uvoz preko HTTP-a + OMR posao u kontejneru = done
+- [ ] CI zelen (docker-omr), PR #17 opis dopuniti, korisnik spaja

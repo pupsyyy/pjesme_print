@@ -34,8 +34,10 @@ urediš pjesme u pregledniku i preuzmeš **novi PDF ili Word**.
 
 ## Baza pjesama (`/baza`)
 
-Gumb **🗂 Baza pjesama** u zaglavlju. Ubaciš PDF-ove (više odjednom) i od
-njih nastaje baza (SQLite) u kojoj je za svaku pjesmu:
+Gumb **🗂 Baza pjesama** u zaglavlju. Ubaciš PDF-ove (više odjednom) ili
+**ZIP** s više PDF-ova i datoteka nota, i od njih nastaje baza (SQLite).
+Pjesma može imati: samo tekst · tekst + akorde · tekst + note · tekst +
+akorde + note (ili zasad samo note). Za svaku pjesmu je:
 
 - **metapodaci**: naslov, podnaslov (izvođač), tonalitet (Key), blokovi
   poput „Pjesmarica" s brojevima, izvorna datoteka i stranica
@@ -91,6 +93,39 @@ imenom), u bazi samo popis. Vrsta se provjerava po sadržaju datoteke; slike
 i PDF se otvaraju u pregledniku, ostalo se preuzima. Brisanjem pjesme brišu
 se i njezine note.
 
+**Note iz PDF-a** — kod uvoza se stranice s notama prepoznaju same
+(crtovlja kao vektorske crte, notni fontovi Sibeliusa/MuseScorea/Finalea…,
+ili crtovlja na skenu/fotografiji) i spremaju se kao note — ne kao tekst:
+- uz pjesmu iz **istog PDF-a** (PDF s jednom pjesmom; note odmah iza/ispred
+  teksta pjesme; stranica s melodijom gore i kiticama ispod),
+- uz pjesmu u bazi **istog naslova** (naslov iznad nota ili iz imena
+  datoteke, npr. „Isus najljepše ime - Full Score.pdf") ili s **istim
+  tekstom ispod nota**,
+- uz jedinu pjesmu iz **iste mape ZIP-a**,
+- inače nastaje **nova pjesma sa samo notama**; kad kasnije uvezeš PDF s
+  tekstom istog naslova, ta pjesma dobije tekst (note ostaju uz nju).
+
+Note koje već imamo (isti sadržaj) ne dodaju se ponovo. Pogrešno pridružene
+note premjesti gumbom ⇄ (prazna pjesma koja je imala samo te note se briše).
+
+**Prepoznavanje nota (neobavezno, Audiveris)** — gumb „🔍 Prepoznaj" na PDF-u
+ili slici nota pročita notni zapis i spremi ga kao **MusicXML** uz istu
+pjesmu (u pozadini, ≈ pola minute po stranici). Dobro radi na čistim notama
+iz programa (Sibelius, MuseScore, Finale) i kvalitetnom tisku; skenovi i
+fotografije trebaju ispravke u MuseScoreu. Uključuje se pri izgradnji Docker
+slike (`WITH_OMR=1`, vidi DEPLOY.md). MusicXML note (prepoznate ili dodane)
+se gumbom „▶ Prikaži" prikažu u pregledniku, uz **transpoziciju** ±6 polutonova.
+
+**Snimke** — „🎧 Snimke": YouTube link po glasovima (Svi glasovi, Sopran, Alt,
+Tenor, Bas, Matrica, Solo ili vlastiti naziv) ili audio s **Google diska**
+(datoteka dijeljena s „Svi koji imaju link"); „▶ Slušaj" ih pušta na stranici.
+
+**Oznake zbirki pri uvozu** — u polje ispod gumba za uvoz upiši npr.
+`#pučkepjesme #velikizbor` i sve **nove** pjesme iz tog uvoza dobiju te
+oznake (pjesme koje već imamo ne). Oznake zbirki (Pučke pjesme, Veliki zbor
+i vlastite) imaju 👁 — klik **sakrije** te pjesme iz popisa (pamti se u
+pregledniku), npr. kad uvezeš puno pjesama koje inače ne trebaš.
+
 Iz baze: pretraga (naslov, broj, tekst, bez obzira na dijakritike), filter po oznaci,
 pregled s akordima, preuzimanje PDF-a (izvorni izgled), ChordPro i JSON,
 te **„Napravi pjesmaricu"** — odabrane pjesme otvore se u uredniku
@@ -101,9 +136,9 @@ te **„Napravi pjesmaricu"** — odabrane pjesme otvore se u uredniku
 | Zahtjev | Odgovor |
 |---|---|
 | `GET /api/v1` | broj pjesama, popis endpointa |
-| `GET /api/v1/songs?q=&tag=&limit=&offset=` | popis (id, naslov, podnaslov, key, brojevi, oznake); `tag=-` = bez oznake |
+| `GET /api/v1/songs?q=&tag=&exclude=&limit=&offset=` | popis (id, naslov, podnaslov, key, brojevi, oznake, `notes_count`, `links_count`, `has_text`); `tag=-` = bez oznake; `exclude=Veliki zbor,Pučke pjesme` = bez tih oznaka |
 | `GET /api/v1/tags` | oznake s brojem pjesama |
-| `GET /api/v1/songs/<id>` | cijela pjesma: `meta`, `sections` (tekst + akordi), `lyrics`, `chordpro`, `sources`, `tags`, `notes` |
+| `GET /api/v1/songs/<id>` | cijela pjesma: `meta`, `sections` (tekst + akordi), `lyrics`, `chordpro`, `sources`, `tags`, `notes`, `links` (snimke: `voice`, `url`, `kind` youtube/drive/audio/link, `embed`) |
 | `GET /api/v1/notes/<id>` | datoteka nota (id iz `notes` pjesme) |
 | `GET /api/v1/songs/<id>.cho` | ChordPro tekst |
 | `GET /api/v1/songs/<id>.pdf` | PDF u izvornom izgledu |
