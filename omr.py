@@ -181,12 +181,53 @@ def _run(conn, job):
     _finish(conn, job["id"], "done", f"Prepoznato: {len(outputs)} MusicXML", first)
 
 
+MAX_PIXELS = 18_000_000            # Audiveris odbija stranice > 20 milijuna točaka
+PDF_DPI = 300
+
+
+def pdf_dpi(path):
+    """Rezolucija za PDF: 300 dpi, ali manje za stranice velikog formata."""
+    import pypdfium2 as pdfium  # noqa: PLC0415
+
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        area = max((w / 72) * (h / 72) for w, h in (doc.get_page_size(i) for i in range(len(doc))))
+    finally:
+        doc.close()
+    return max(72, min(PDF_DPI, int((MAX_PIXELS / max(area, 1)) ** 0.5)))
+
+
+def _shrink_image(src, dst, convert=False):
+    """Velike fotografije (mobitel) smanji ispod granice Audiverisa; WebP u PNG."""
+    from PIL import Image  # noqa: PLC0415
+
+    with Image.open(src) as im:
+        if im.width * im.height <= MAX_PIXELS and not convert:
+            shutil.copyfile(src, dst)
+            return
+        f = min(1.0, (MAX_PIXELS / (im.width * im.height)) ** 0.5)
+        im.convert("L").resize((int(im.width * f), int(im.height * f)), Image.LANCZOS).save(dst)
+
+
 def run_audiveris(src, suffix=".pdf"):
     """Pokreni Audiveris na datoteci -> lista MusicXML (.mxl) sadržaja. Digne OmrError."""
     with tempfile.TemporaryDirectory(prefix="omr-") as tmp:
         tmp = Path(tmp)
-        inp = tmp / ("note" + suffix.lower())
-        shutil.copyfile(src, inp)
+        suffix = suffix.lower()
+        constants = [f"org.audiveris.omr.text.Language.defaultSpecification={LANGS}"]
+        if suffix == ".pdf":
+            inp = tmp / "note.pdf"
+            shutil.copyfile(src, inp)
+            try:
+                constants.append(f"org.audiveris.omr.image.ImageLoading.pdfResolution={pdf_dpi(inp)}")
+            except Exception:  # noqa: BLE001 — neispravan PDF: neka Audiveris javi
+                pass
+        else:
+            inp = tmp / ("note" + (".png" if suffix == ".webp" else suffix))
+            try:
+                _shrink_image(src, inp, convert=suffix == ".webp")
+            except Exception as exc:  # noqa: BLE001
+                raise OmrError("Slika nota se ne može otvoriti.") from exc
         out = tmp / "out"
         out.mkdir()
         # GDK_SCALE: Audiveris inače učitava GTK (za HiDPI zaslon), kojeg na serveru nema
@@ -195,9 +236,10 @@ def run_audiveris(src, suffix=".pdf"):
                                       + JAVA_OPTS + " -Djava.awt.headless=true").strip())
         if os.environ.get("OMR_TESSDATA"):
             env["TESSDATA_PREFIX"] = os.environ["OMR_TESSDATA"]
-        cmd = [AUDIVERIS, "-batch",
-               "-constant", f"org.audiveris.omr.text.Language.defaultSpecification={LANGS}",
-               "-export", "-output", str(out), "--", str(inp)]
+        cmd = [AUDIVERIS, "-batch"]
+        for c in constants:
+            cmd += ["-constant", c]
+        cmd += ["-export", "-output", str(out), "--", str(inp)]
         try:
             proc = subprocess.run(cmd, cwd=tmp, env=env, capture_output=True, text=True,
                                   timeout=TIMEOUT, check=False)

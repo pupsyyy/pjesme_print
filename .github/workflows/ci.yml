@@ -42,4 +42,45 @@ jobs:
           # baza pjesama: stranica i API rade, SQLite se može napraviti u /app/data
           curl -fsS http://127.0.0.1:8000/baza >/dev/null
           python3 -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/v1')); assert d['songs']==0, d; print(d)"
+          # preglednik nota (Verovio) poslužuje aplikacija sama
+          curl -fsS http://127.0.0.1:8000/baza | grep -q 'static/vendor/verovio-toolkit-wasm.js'
+          curl -fsS -o /dev/null http://127.0.0.1:8000/static/vendor/verovio-toolkit-wasm.js
+          docker rm -f pj
+
+  docker-omr:
+    name: Docker s prepoznavanjem nota (WITH_OMR=1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build --build-arg WITH_OMR=1 -t pjesme-print:omr .
+      - name: Uvezi note i prepoznaj ih (Audiveris)
+        run: |
+          docker run -d --name pj -p 8000:8000 pjesme-print:omr
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8000/baza | grep -q 'const OMR = true'
+          curl -fsS -F "file=@tests/fixtures/ljestvica.pdf" http://127.0.0.1:8000/db/import > rep.json
+          python3 - <<'PY'
+          import json, time, urllib.request
+          B = "http://127.0.0.1:8000"
+          note = json.load(open("rep.json"))["reports"][0]["notes"][0]
+          assert note["status"] == "new_song", note
+          song = json.load(urllib.request.urlopen(f"{B}/db/songs/{note['song_id']}"))
+          nid = song["notes"][0]["id"]
+          req = urllib.request.Request(f"{B}/db/notes/{nid}/omr", data=b"", method="POST")
+          job = json.load(urllib.request.urlopen(req))["job"]
+          for _ in range(120):
+              job = json.load(urllib.request.urlopen(f"{B}/db/omr/{job['id']}"))["job"]
+              if job["status"] in ("done", "error"):
+                  break
+              time.sleep(5)
+          print(job)
+          assert job["status"] == "done", job
+          song = json.load(urllib.request.urlopen(f"{B}/db/songs/{note['song_id']}"))
+          assert [n["kind"] for n in song["notes"]] == ["pdf", "musicxml"], song["notes"]
+          PY
+          docker logs pj 2>&1 | tail -20
           docker rm -f pj

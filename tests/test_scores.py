@@ -438,3 +438,23 @@ def test_omr_unavailable(conn, monkeypatch, tmp_path):
     with pytest.raises(omr.OmrError):
         omr.enqueue(conn, 1)
     assert os.path.basename(omr.AUDIVERIS) == "nema"
+
+
+def test_engraved_fixture_and_audiveris_input_size(tmp_path):
+    """Note iz programa za note (Verovio: crtovlja kao putanje, A4 povećan)."""
+    path = os.path.join(os.path.dirname(__file__), "fixtures", "ljestvica.pdf")
+    data = open(path, "rb").read()
+    (info,) = _classify(data)
+    assert info["kind"] == "score" and info["title"] == "Ljestvica za test"
+    # veća stranica od A4 -> manja rezolucija, da Audiveris ne odbije sliku
+    dpi = omr.pdf_dpi(path)
+    assert 200 < dpi < 300
+    with pdfplumber.open(path) as doc:
+        p = doc.pages[0]
+        assert (p.width / 72 * dpi) * (p.height / 72 * dpi) <= omr.MAX_PIXELS
+    big = tmp_path / "foto.webp"
+    Image.new("RGB", (6000, 4000), "white").save(big, "WEBP")
+    small = tmp_path / "foto.png"
+    omr._shrink_image(big, small, convert=True)
+    with Image.open(small) as im:
+        assert im.format == "PNG" and im.width * im.height <= omr.MAX_PIXELS
