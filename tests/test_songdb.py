@@ -64,6 +64,25 @@ def _song_v1():
     }
 
 
+def _longer(song):
+    """Ista pjesma s dodatnom kiticom (dulja verzija)."""
+    s = copy.deepcopy(song)
+    s["sections"].append({"label": "Verse 2", "lines": [
+        {"text": "Blagoslovljen aleluja, budi uvijek aleluja", "chords": [[0, "G"]]},
+        {"text": "Hosana tebi aleluja, dođi sada aleluja", "chords": [[0, "D"]]},
+        {"text": "Svet si Gospode, svet si Bože naš", "chords": [[0, "C"]]}]})
+    return s
+
+
+def _retitled_similar(song):
+    """Drukčiji naslov, tekst ~85-90 % isti."""
+    s = copy.deepcopy(song)
+    s["title"] = "Posve drukčiji naslov"
+    s["sections"][0]["lines"][2]["text"] = "Isus Krist je naš Gospodin i Kralj"
+    s["sections"][2]["lines"][0]["text"] = "U Tebi mirno ostajem "
+    return s
+
+
 def _roundtrip(song, first_page=1):
     pdf1 = chord_render.render_pdf([song], first_page=first_page)
     res = chord_extract.extract(pdf1, "test.pdf")
@@ -188,25 +207,34 @@ def test_import_duplicate_conflict_resolve(conn):
     r = songdb.import_songs(conn, [song, other_layout], "b.pdf")
     assert len(r["duplicates"]) == 2 and not r["added"]
 
-    # jedan akord drukčiji -> 100 % sličan tekst -> čeka odluku
+    # isti tekst, drugi akord/tonalitet -> već imamo, ne dodaje se i ne pita
     changed = copy.deepcopy(song)
     changed["sections"][0]["lines"][0]["chords"][0][1] = "Em"
+    changed["key"] = "A"
     r = songdb.import_songs(conn, [changed], "c.pdf")
+    assert not r["added"] and not r["conflicts"]
+    assert r["duplicates"][0]["reason"] == "same_song" and r["duplicates"][0]["existing_id"] == sid
+
+    # dulja verzija iste pjesme -> pita (možda je bolja)
+    longer = _longer(song)
+    r = songdb.import_songs(conn, [longer], "d.pdf")
     assert len(r["conflicts"]) == 1
     c = r["conflicts"][0]
-    assert c["existing_id"] == sid and c["similarity"] == 1.0
-    # ponovni uvoz iste izmjene ne stvara drugu odluku
-    r = songdb.import_songs(conn, [changed], "c.pdf")
+    assert c["existing_id"] == sid and c["reason"] == "longer"
+    # ponovni uvoz iste dulje verzije ne stvara drugu odluku
+    r = songdb.import_songs(conn, [longer], "d.pdf")
     assert len(r["duplicates"]) == 1 and not r["conflicts"]
     pend = songdb.list_pending(conn)
-    assert len(pend) == 1 and pend[0]["new"]["sections"][0]["lines"][0]["chords"][0][1] == "Em"
+    assert len(pend) == 1 and pend[0]["reason"] == "longer"
+    assert pend[0]["new"]["sections"][-1]["label"] == "Verse 2"
 
     # zamijeni -> isti id, nova verzija, izvori se pamte
     assert songdb.resolve(conn, c["pending_id"], "replace") == sid
     s = songdb.get_song(conn, sid)
-    assert s["sections"][0]["lines"][0]["chords"][0][1] == "Em"
-    assert [x["file"] for x in s["sources"]] == ["a.pdf", "b.pdf", "c.pdf"]
-    assert songdb.stats(conn) == {"songs": 1, "pending": 0, "imports": 4}
+    assert s["sections"][-1]["label"] == "Verse 2"
+    assert [x["file"] for x in s["sources"]] == ["a.pdf", "b.pdf", "c.pdf", "d.pdf"]
+    assert songdb.stats(conn) == {"songs": 1, "pending": 0, "imports": 5,
+                                  "notes": 0, "links": 0, "notes_only": 0}
     assert songdb.resolve(conn, c["pending_id"], "replace") is None
 
 
@@ -222,19 +250,44 @@ def test_keep_both_keep_existing_and_threshold(conn):
         {"text": "i još jedan redak bez veze s prvom", "chords": []}]}]
     assert len(songdb.import_songs(conn, [other], "o.pdf")["added"]) == 1
 
-    v2 = copy.deepcopy(base)
-    v2["key"] = "A"
-    p1 = songdb.import_songs(conn, [v2], "k.pdf")["conflicts"][0]["pending_id"]
-    v3 = copy.deepcopy(base)
-    v3["subtitle"] = "Netko drugi"
-    p2 = songdb.import_songs(conn, [v3], "s.pdf")["conflicts"][0]["pending_id"]
+    # drukčiji naslov, tekst ≥ 80 % -> pita
+    p1 = songdb.import_songs(conn, [_retitled_similar(base)], "k.pdf")["conflicts"][0]
+    assert p1["reason"] == "similar" and 0.8 <= p1["similarity"] < 0.95
+    p2 = songdb.import_songs(conn, [_longer(base)], "s.pdf")["conflicts"][0]["pending_id"]
 
-    assert songdb.resolve(conn, p1, "keep_existing") == sid
-    assert songdb.get_song(conn, sid)["key"] == "G"
+    assert songdb.resolve(conn, p1["pending_id"], "keep_existing") == sid
+    assert songdb.get_song(conn, sid)["title"] == base["title"]
     new_id = songdb.resolve(conn, p2, "keep_both")
-    assert new_id != sid and songdb.get_song(conn, new_id)["subtitle"] == "Netko drugi"
+    assert new_id != sid and len(songdb.get_song(conn, new_id)["sections"]) == 4
     with pytest.raises(ValueError):
         songdb.resolve(conn, 1, "obrisi_sve")
+
+
+def test_same_song_other_version_and_same_title_other_song(conn):
+    """Slučajevi iz pjesmarica: kraća verzija pod duljim naslovom = ista pjesma;
+    isti naslov s drugim tekstom = druga pjesma."""
+    jona = {"title": "Nešto Više Od Jone", "key": "A", "subtitle": "", "meta": [], "layout": {},
+            "sections": [{"label": "Chorus", "lines": [
+                {"text": "Evo, ovdje je nešto više od Jone", "chords": [[0, "Am"]]},
+                {"text": "Evo, ovdje je nešto više od Salomona", "chords": []},
+                {"text": "Evo, ovdje je nešto veće od Hrama", "chords": []}]}]}
+    sid = songdb.import_songs(conn, [jona], "app.pdf")["added"][0]["id"]
+    kraca = copy.deepcopy(jona)
+    kraca["title"] = "EVO, OVDJE JE NEŠTO VIŠE OD JONE"
+    kraca["sections"][0]["lines"] = kraca["sections"][0]["lines"][:2]
+    r = songdb.import_songs(conn, [kraca], "tabor.pdf")
+    assert r["duplicates"][0]["existing_id"] == sid and not r["added"] and not r["conflicts"]
+
+    hv1 = {"title": "HVALOSPJEV LJUBAVI", "subtitle": "KEFA", "key": "", "meta": [], "layout": {},
+           "sections": [{"label": None, "lines": [
+               {"text": "Kada jezike bih sve govorio a ljubavi ne bih imao", "chords": []},
+               {"text": "Bio bih mjed što ječi, cimbal što zveči", "chords": []}]}]}
+    hv2 = {"title": "HVALOSPJEV LJUBAVI", "subtitle": "Frama", "key": "", "meta": [], "layout": {},
+           "sections": [{"label": None, "lines": [
+               {"text": "Ljubav je strpljiva, ljubav je dobrostiva", "chords": []},
+               {"text": "Ona ne zavidi, ne hvasta se, ne oholi", "chords": []}]}]}
+    r = songdb.import_songs(conn, [hv1, hv2], "tabor.pdf")
+    assert len(r["added"]) == 2
 
 
 def test_search_and_delete_cascade(conn):
@@ -244,12 +297,11 @@ def test_search_and_delete_cascade(conn):
     assert songdb.list_songs(conn, "203")["total"] == 1            # broj u pjesmarici
     assert songdb.list_songs(conn, "papa band")["total"] == 1
     assert songdb.list_songs(conn, "nema toga")["total"] == 0
-    changed = copy.deepcopy(song)
-    changed["key"] = "D"
-    songdb.import_songs(conn, [changed], "b.pdf")
+    songdb.import_songs(conn, [_longer(song)], "b.pdf")
     assert songdb.stats(conn)["pending"] == 1
     assert songdb.delete_song(conn, sid)
-    assert songdb.stats(conn) == {"songs": 0, "pending": 0, "imports": 2}
+    assert songdb.stats(conn) == {"songs": 0, "pending": 0, "imports": 2,
+                                  "notes": 0, "links": 0, "notes_only": 0}
 
 
 def test_song_from_db_renders_identically(conn):
@@ -318,12 +370,13 @@ def test_web_import_list_view_and_api(client):
 
 def test_web_conflict_flow_and_errors(client):
     _upload(client, chord_render.render_pdf([_song_v2()]))
-    changed = _song_v2()
+    changed = _longer(_song_v2())
     changed["key"] = "A"
     rep = _upload(client, chord_render.render_pdf([changed])).get_json()["reports"][0]
     assert len(rep["conflicts"]) == 1
     pend = client.get("/db/pending").get_json()["items"]
     assert len(pend) == 1 and pend[0]["new"]["key"] == "A" and pend[0]["existing"]["key"] == "G"
+    assert pend[0]["reason"] == "longer"
     pid = pend[0]["id"]
     assert client.post(f"/db/pending/{pid}", json={"action": "x"}).status_code == 400
     r = client.post(f"/db/pending/{pid}", json={"action": "replace"})
@@ -407,3 +460,371 @@ def test_download_names_without_diacritics():
     from songdb_web import _ascii_name
     assert _ascii_name("Aleluja (Bože svet si ) – Đurđevak") == "Aleluja_Boze_svet_si_Durdevak"
     assert _ascii_name("!!!") == "pjesma"
+
+
+def test_crowded_chords_one_visible_hyphen_roundtrip():
+    song = _song_v2()
+    song["sections"] = [{"label": None, "lines": [
+        {"text": "Kada jezike bih sve govorio a ljubavi", "chords": [[0, "G"], [24, "Gsus4"], [26, "C"], [28, "Gmaj7"]]}]}]
+    text, _extra, _placed = chord_render.layout_pair(
+        song["sections"][0]["lines"][0]["text"], song["sections"][0]["lines"][0]["chords"], 12,
+        chord_extract.PROFILES["v2"])
+    assert text.count("-") <= 2 and "--" not in text
+    pdf1, back, pdf2 = _roundtrip(song)
+    assert chord_compare.compare(pdf1, pdf2)["identical"]
+    assert back["sections"][0]["lines"] == song["sections"][0]["lines"]
+
+
+def test_web_resolve_all(client):
+    _upload(client, chord_render.render_pdf([_song_v2()]))
+    a, b = _longer(_song_v2()), _retitled_similar(_song_v2())
+    rep = _upload(client, chord_render.render_pdf([a, b])).get_json()["reports"][0]
+    assert len(rep["conflicts"]) == 2
+    assert client.post("/db/pending/all", json={"action": "nista"}).status_code == 400
+    r = client.post("/db/pending/all", json={"action": "keep_existing"})
+    assert r.get_json()["resolved"] == 2
+    assert client.get("/db/stats").get_json() == {"songs": 1, "pending": 0, "imports": 2,
+                                                 "notes": 0, "links": 0, "notes_only": 0}
+
+
+def test_migration_adds_pending_reason(tmp_path):
+    import sqlite3
+    path = tmp_path / "stara.db"
+    old = sqlite3.connect(path)
+    old.executescript(songdb.SCHEMA.replace(
+        "    source      TEXT NOT NULL DEFAULT '{}',\n    created_at  TEXT NOT NULL\n);\n\nCREATE TABLE IF NOT EXISTS imports",
+        "    source      TEXT NOT NULL DEFAULT '{}',\n    created_at  TEXT NOT NULL\n);\nCREATE TABLE IF NOT EXISTS imports"))
+    cols = {r[1] for r in old.execute("PRAGMA table_info(pending)")}
+    old.execute("ALTER TABLE pending DROP COLUMN reason") if "reason" in cols else None
+    old.commit()
+    old.close()
+    c = songdb.connect(path)
+    assert "reason" in {r["name"] for r in c.execute("PRAGMA table_info(pending)")}
+    songdb.import_songs(c, [_song_v2()], "a.pdf")
+    assert songdb.import_songs(c, [_longer(_song_v2())], "b.pdf")["conflicts"][0]["reason"] == "longer"
+
+
+# ── Pjesmarica iz Worda (kao TABOR PJESMARICA) ───────────────────────────────
+
+def _word_songbook():
+    """Sintetska pjesmarica u stilu Worda: naslovnica, glava/podnožje s crtama,
+    centriran podcrtan naslov, crveni akordi iznad centriranog teksta,
+    kurzivni refren, podnaslov i capo."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    from reportlab.pdfgen import canvas
+    W, H = A4
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.setFont("Helvetica-Bold", 48)
+    c.drawCentredString(W / 2, H / 2, "PJESMARICA 2017")      # naslovnica
+    c.showPage()
+
+    def page(title, sub, capo, blocks):
+        c.setFont("Times-Roman", 12)
+        c.drawString(70, H - 47, "Bog moj i sve moje")           # glava
+        c.rect(69, H - 64, 456, 0.5, fill=1, stroke=0)
+        c.rect(69, H - 771, 456, 0.5, fill=1, stroke=0)
+        c.drawString(70, H - 785, "PJESMARICA")                   # podnožje
+        y = H - 129
+        c.setFont("Helvetica-Bold", 16)
+        tw = stringWidth(title, "Helvetica-Bold", 16)
+        c.drawCentredString(W / 2, y, title)
+        c.setFillColorRGB(1, 0, 0)
+        c.rect(W / 2 - tw / 2, y - 3, tw, 1.5, fill=1, stroke=0)
+        c.setFillColorRGB(0, 0, 0)
+        for small in (sub, capo):
+            if small:
+                y -= 15
+                c.setFont("Helvetica-Bold", 12)
+                c.drawCentredString(W / 2, y, small)
+        y -= 20
+        for italic, lines in blocks:
+            font = "Helvetica-Oblique" if italic else "Helvetica"
+            for text, chords in lines:
+                lw = stringWidth(text, font, 16)
+                x0 = W / 2 - lw / 2
+                if chords:
+                    c.setFillColorRGB(1, 0, 0)
+                    c.setFont("Helvetica-Bold", 15)
+                    for idx, ch in chords:      # akord malo lijevo od sloga, kao u Wordu
+                        c.drawString(x0 + stringWidth(text[:idx], font, 16) - 2.5, y, ch)
+                    c.setFillColorRGB(0, 0, 0)
+                    y -= 19
+                c.setFont(font, 16)
+                c.drawString(x0, y, text)
+                y -= 19
+            y -= 19                               # prazan odlomak
+        c.showPage()
+
+    # (standardni PDF fontovi nemaju č/ć — u pravoj pjesmarici su TTF fontovi)
+    page("ABBA OCE", None, None, [
+        (False, [("Abba, Oce! Abba, Oce!", [[0, "G"], [6, "C"], [11, "D"], [17, "G"]]),
+                 ("Duša moja traži Te!", [[0, "h"], [5, "F#"], [16, "h"], [19, "D7"]])]),
+        (True, [("Uvijek Tebe ja cu ljubiti!", [[0, "h"], [7, "C"], [12, "a"], [18, "G"], [21, "DG"]]),
+                ("Uvijek Tebe ja cu ljubiti!", [])]),
+    ])
+    page("HVALOSPJEV LJUBAVI", "(KEFA)", "capo 3 fret", [
+        (False, [("Kada jezike bih sve govorio", [[0, "G"], [21, "D"]]),
+                 ("a ljubavi ne bih imao", [])]),
+    ])
+    c.save()
+    return buf.getvalue()
+
+
+def test_word_songbook_import():
+    res = chord_extract.extract(_word_songbook(), "tabor.pdf")
+    assert [s["title"] for s in res["songs"]] == ["ABBA OCE", "HVALOSPJEV LJUBAVI"]
+    assert any("Stranica 1 preskočena" in w for w in res["warnings"])
+    abba, hv = res["songs"]
+    assert abba["layout"]["source_format"] == "word"
+    v, r = abba["sections"]
+    assert v["label"] is None and r["label"] is None   # kurziv se čuva, ali nije "Refren"
+    assert v["lines"][0] == {"text": "Abba, Oce! Abba, Oce!",
+                             "chords": [[0, "G"], [6, "C"], [11, "D"], [17, "G"]]}
+    assert v["lines"][1]["chords"] == [[0, "h"], [5, "F#"], [16, "h"], [19, "D7"]]
+    assert r["lines"][0]["chords"] == [[0, "h"], [7, "C"], [12, "a"], [18, "G"], [21, "DG"]]
+    assert r["lines"][0]["fmt"] == {"text": "italic"} and r["lines"][1]["chords"] == []
+    assert hv["subtitle"] == "KEFA"
+    assert hv["meta"] == [{"label": "Capo", "values": ["3 fret"]}]
+    assert hv["sections"][0]["lines"][0]["chords"] == [[0, "G"], [21, "D"]]
+    # glava i podnožje nisu ušli u tekst
+    assert "Bog moj" not in chord_extract.lyrics_text(abba) + chord_extract.lyrics_text(hv)
+    # iz baze se iscrtava u standardnom izgledu (bez greške, s kurzivom)
+    pdf = chord_render.render_pdf(res["songs"])
+    import pdfplumber
+    with pdfplumber.open(io.BytesIO(pdf)) as doc:
+        fonts = {c["fontname"].split("+")[-1] for c in doc.pages[0].chars}
+    assert "OpenSans-Italic" in fonts
+
+
+def test_word_songbook_web_import(client):
+    rep = _upload(client, _word_songbook(), "tabor.pdf").get_json()["reports"][0]
+    assert len(rep["added"]) == 2 and not rep.get("error")
+    rep = _upload(client, _word_songbook(), "tabor.pdf").get_json()["reports"][0]
+    assert len(rep["duplicates"]) == 2 and not rep["added"]
+
+
+# ── Oznake ────────────────────────────────────────────────────────────────────
+
+def test_tag_suggestions_rules():
+    import songtags
+    s = _song_v2()
+    assert songtags.suggest(s, ["Papa band pjesmarica_Klanjanje.pdf"]) == ["Aleluja", "Klanjanje"]
+    assert songtags.suggest(s, ["klajanje (08-10-2025).pdf"]) == ["Aleluja", "Klanjanje"]
+    assert "Aleluja" in songtags.suggest(s)                      # naslov "Aleluja (...)"
+    def song(title, *lines):
+        return {"title": title, "sections": [{"label": None, "lines": [{"text": t, "chords": []} for t in lines]}]}
+    assert songtags.suggest(song("Psalam 34 (Gledajte u Gospodina)", "Kušajte i vidite")) == ["Psalam"]
+    assert songtags.suggest(song("Gospodine", "Gospodine, smiluj se", "Kriste, smiluj se")) == ["Gospodine"]
+    assert songtags.suggest(song("Svet", "Svet, svet, svet Gospodin Bog Sabaot", "Hosana u visini")) == ["Gospodine"]
+    # obrada "Agnus Dei" (pjesma hvale) nije liturgijski Jaganjče Božji
+    assert "Gospodine" not in songtags.suggest(song("Agnus Dei", "Aleluja", "Sveti, sveti, svet si Bože svemogući"))
+    assert songtags.suggest(song("Dođi Kruše života", "Ti skrivena tajno, u meni se nastani")) == ["Pričest"]
+    assert songtags.suggest(song("Zdravo Marijo", "Zdravo Marijo, milosti puna")) == ["Marijanska"]
+    assert songtags.suggest(song("Golgota", "Na križu za nas razapet")) == ["Korizma"]
+    assert songtags.suggest(song("Isuse znam da si tu", "Kruh i vino prinosimo Bože")) == ["Prinos"]
+    assert songtags.suggest(song("Bog te ljubi", "Tvoju su lađu vjetrovi odnijeli")) == []
+
+
+def test_tags_db_auto_confirm_remove_bulk_filter(conn):
+    r = songdb.import_songs(conn, [_song_v2()], "Papa band pjesmarica_Klanjanje.pdf")
+    sid = r["added"][0]["id"]
+    tags = songdb.get_song(conn, sid)["tags"]
+    assert {t["name"] for t in tags} == {"Aleluja", "Klanjanje"} and all(t["auto"] for t in tags)
+    assert songdb.list_tags(conn)["tags"][0]["name"] == "Ulazna"          # zadani popis
+    # potvrdi prijedlog, dodaj novu oznaku, makni prijedlog
+    songdb.set_tag(conn, sid, "Klanjanje")
+    songdb.set_tag(conn, sid, "Mladi")
+    songdb.remove_tag(conn, sid, "Aleluja")
+    assert songdb.get_song(conn, sid)["tags"] == [{"name": "Klanjanje", "auto": False},
+                                                  {"name": "Mladi", "auto": False}]
+    # ponovni prijedlog ne vraća maknute oznake
+    assert songdb.suggest_all(conn) == (0, 0)
+    assert songdb.list_songs(conn, tag="Mladi")["total"] == 1
+    assert songdb.list_songs(conn, tag="Pričest")["total"] == 0
+    other = copy.deepcopy(_song_v2())
+    other["title"] = "Druga"
+    other["sections"] = [{"label": None, "lines": [{"text": "posve drugi tekst bez ičega", "chords": []}]}]
+    oid = songdb.import_songs(conn, [other], "x.pdf")["added"][0]["id"]
+    assert songdb.list_songs(conn, tag="-")["total"] == 1                  # bez oznake
+    assert songdb.bulk_tag(conn, [sid, oid], "Kroz godinu") == 2
+    assert songdb.list_songs(conn, tag="kroz godinu")["total"] == 2         # bez obzira na velika slova
+    assert songdb.bulk_tag(conn, [sid, oid], "Kroz godinu", "remove") == 2
+    with pytest.raises(ValueError):
+        songdb.set_tag(conn, sid, "   ")
+    assert songdb.delete_song(conn, sid)
+    assert conn.execute("SELECT COUNT(*) FROM song_tags WHERE song_id=?", (sid,)).fetchone()[0] == 0
+
+
+def test_tags_migration_and_suggest_for_old_songs(tmp_path):
+    import sqlite3
+    path = tmp_path / "stara.db"
+    c = songdb.connect(path)
+    songdb.import_songs(c, [_song_v2()], "Pričest_žuto.pdf")
+    # simuliraj bazu iz prethodne verzije: bez oznaka i bez stupca "tagged"
+    c.execute("DELETE FROM song_tags")
+    c.execute("ALTER TABLE songs DROP COLUMN tagged")
+    c.close()
+    c = songdb.connect(path)
+    assert songdb.suggest_all(c) == (1, 2)                                 # Aleluja + Pričest (izvor)
+    sid = songdb.list_songs(c)["items"][0]["id"]
+    assert {t["name"] for t in songdb.get_song(c, sid)["tags"]} == {"Aleluja", "Pričest"}
+
+
+def test_web_tags(client):
+    _upload(client, chord_render.render_pdf([_song_v2()]), "klanjanje.pdf")
+    sid = client.get("/db/songs").get_json()["items"][0]["id"]
+    assert {t["name"] for t in client.get(f"/db/songs/{sid}").get_json()["tags"]} == {"Aleluja", "Klanjanje"}
+    r = client.post(f"/db/songs/{sid}/tags", json={"name": "Završna"})
+    assert {"name": "Završna", "auto": False} in r.get_json()["tags"]
+    r = client.delete(f"/db/songs/{sid}/tags/Aleluja")
+    assert "Aleluja" not in {t["name"] for t in r.get_json()["tags"]}
+    assert client.post(f"/db/songs/{sid}/tags", json={"name": ""}).status_code == 400
+    assert client.post("/db/songs/999/tags", json={"name": "X"}).status_code == 404
+    assert client.post("/db/tags/bulk", json={"ids": [sid], "name": "Pričest"}).get_json()["changed"] == 1
+    assert client.post("/db/tags/bulk", json={"ids": [sid], "name": "X", "action": "zbrisi"}).status_code == 400
+    assert client.post("/db/tags/suggest").get_json() == {"ok": True, "songs": 0, "tags": 0}
+    tags = {t["name"]: t["count"] for t in client.get("/api/v1/tags").get_json()["tags"]}
+    assert tags["Pričest"] == 1 and tags["Završna"] == 1 and tags["Aleluja"] == 0
+    assert client.get("/api/v1/songs?tag=Završna").get_json()["total"] == 1
+    assert "tags" in json.loads(client.get("/api/v1/export").data)["songs"][0]
+
+
+def test_web_tags_need_password(client, monkeypatch):
+    monkeypatch.setenv("DB_PASSWORD", "tajna")
+    _upload(client, chord_render.render_pdf([_song_v2()]), headers={"X-DB-Password": "tajna"})
+    sid = client.get("/db/songs").get_json()["items"][0]["id"]
+    assert client.post(f"/db/songs/{sid}/tags", json={"name": "X"}).status_code == 401
+    assert client.delete(f"/db/songs/{sid}/tags/X").status_code == 401
+    assert client.post("/db/tags/bulk", json={"ids": [sid], "name": "X"}).status_code == 401
+    assert client.post("/db/tags/suggest").status_code == 401
+    assert client.get("/db/tags").status_code == 200
+
+
+# ── Note (notni zapis) ────────────────────────────────────────────────────────
+
+def _png():
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 20), "white").save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _zip(name, content=b"<x/>"):
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(name, content)
+    return buf.getvalue()
+
+
+MUSICXML = (b'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE score-partwise>\n'
+            b'<score-partwise version="3.1"><part-list/></score-partwise>')
+
+
+def test_notes_types_and_validation(tmp_path):
+    import songnotes
+    ok = {
+        "Abba Oče.pdf": chord_render.render_pdf([_song_v2()]),
+        "sopran.png": _png(),
+        "gitara.jpg": b"\xff\xd8\xff\xe0" + b"0" * 20,
+        "x.webp": b"RIFF\x10\x00\x00\x00WEBPVP8 " + b"0" * 10,
+        "zbor.musicxml": MUSICXML,
+        "zbor.xml": MUSICXML,
+        "zbor.mxl": _zip("score.xml", MUSICXML),
+        "klavir.mscz": _zip("score.mscx"),
+        "klavir.mscx": b"<?xml version='1.0'?><museScore version='4.0'></museScore>",
+        "melodija.mid": b"MThd\x00\x00\x00\x06\x00\x01",
+    }
+    for name, data in ok.items():
+        songnotes.check_file(name, data)
+    bad = {
+        "slika.svg": b"<svg></svg>",
+        "virus.exe": b"MZ",
+        "lazni.pdf": _png(),                       # PNG preimenovan u .pdf
+        "nije.xml": b"<html></html>",              # XML koji nije MusicXML
+        "prazno.png": b"",
+        "nije.mxl": b"PK nije zip",
+    }
+    for name, data in bad.items():
+        with pytest.raises(songnotes.NoteError):
+            songnotes.check_file(name, data)
+    assert songnotes.clean_name("../../etc/passwd", "x") == "passwd"
+    assert songnotes.clean_name("a\x00b\nc.pdf", "x") == "abc.pdf"
+
+
+def test_notes_db_add_list_rename_delete(conn, tmp_path):
+    sid = songdb.import_songs(conn, [_song_v2()], "a.pdf")["added"][0]["id"]
+    n1 = songdb.add_note(conn, sid, "Abba Oče – sopran.png", _png())
+    n2 = songdb.add_note(conn, sid, "zbor.musicxml", MUSICXML, name="Zbor SATB")
+    assert n1["name"] == "Abba Oče – sopran" and n1["kind"] == "image" and n1["inline"]
+    assert n2["name"] == "Zbor SATB" and n2["kind"] == "musicxml" and not n2["inline"]
+    assert songdb.add_note(conn, 999, "x.png", _png()) is None
+    notes = songdb.get_song(conn, sid)["notes"]
+    assert [n["id"] for n in notes] == [n1["id"], n2["id"]]
+    assert songdb.list_songs(conn)["items"][0]["notes_count"] == 2
+    # datoteka je odvojeno, pod nasumičnim imenom
+    meta, path = songdb.get_note(conn, n1["id"])
+    assert path.parent.name == "note" and path.read_bytes() == _png()
+    assert "Abba" not in path.name
+    # tekst i akordi pjesme se ne mijenjaju
+    assert songdb.get_song(conn, sid)["sections"] == _song_v2()["sections"]
+    assert songdb.rename_note(conn, n1["id"], "Sopran")
+    with pytest.raises(ValueError):
+        songdb.rename_note(conn, n1["id"], "  ")
+    assert songdb.delete_note(conn, n1["id"]) and not path.exists()
+    assert not songdb.delete_note(conn, n1["id"])
+    _m2, path2 = songdb.get_note(conn, n2["id"])
+    assert songdb.delete_song(conn, sid) and not path2.exists()     # note idu s pjesmom
+    assert conn.execute("SELECT COUNT(*) FROM attachments").fetchone()[0] == 0
+
+
+def test_web_notes(client):
+    _upload(client, chord_render.render_pdf([_song_v2()]))
+    sid = client.get("/db/songs").get_json()["items"][0]["id"]
+    pdf = chord_render.render_pdf([_song_v2()])
+    r = client.post(f"/db/songs/{sid}/notes", data={"file": [(io.BytesIO(pdf), "Abba Oče.pdf"),
+                                                            (io.BytesIO(b"<svg/>"), "x.svg"),
+                                                            (io.BytesIO(MUSICXML), "zbor.musicxml")]},
+                    content_type="multipart/form-data")
+    body = r.get_json()
+    assert r.status_code == 200 and len(body["added"]) == 2 and len(body["errors"]) == 1
+    pid, xid = body["added"][0]["id"], body["added"][1]["id"]
+    f = client.get(f"/db/notes/{pid}")
+    assert f.status_code == 200 and f.mimetype == "application/pdf" and f.data == pdf
+    assert "inline" in f.headers["Content-Disposition"] and f.headers["X-Content-Type-Options"] == "nosniff"
+    assert "attachment" in client.get(f"/db/notes/{pid}?download=1").headers["Content-Disposition"]
+    assert "attachment" in client.get(f"/db/notes/{xid}").headers["Content-Disposition"]   # MusicXML se preuzima
+    assert client.patch(f"/db/notes/{xid}", json={"name": "Zbor"}).get_json()["ok"]
+    song = client.get(f"/api/v1/songs/{sid}").get_json()
+    assert [n["name"] for n in song["notes"]] == ["Abba Oče", "Zbor"]
+    assert client.get(f"/api/v1/notes/{pid}").data == pdf
+    assert "notes" in json.loads(client.get("/api/v1/export").data)["songs"][0]
+    assert client.get("/db/songs").get_json()["items"][0]["notes_count"] == 2
+    bad = client.post(f"/db/songs/{sid}/notes", data={"file": (io.BytesIO(b"MZ"), "x.exe")},
+                      content_type="multipart/form-data")
+    assert bad.status_code == 400 and "PDF" in bad.get_json()["error"]
+    assert client.post(f"/db/songs/{sid}/notes").status_code == 400
+    assert client.post("/db/songs/999/notes", data={"file": (io.BytesIO(pdf), "a.pdf")},
+                       content_type="multipart/form-data").status_code == 404
+    assert client.delete(f"/db/notes/{pid}").get_json()["ok"]
+    assert client.get(f"/db/notes/{pid}").status_code == 404
+    assert b'accept=".pdf,.png' in client.get("/baza").data
+
+
+def test_web_notes_need_password_and_token(client, monkeypatch):
+    monkeypatch.setenv("DB_PASSWORD", "tajna")
+    monkeypatch.setenv("API_TOKEN", "tok")
+    pw = {"X-DB-Password": "tajna"}
+    _upload(client, chord_render.render_pdf([_song_v2()]), headers=pw)
+    sid = client.get("/db/songs").get_json()["items"][0]["id"]
+    up = lambda h: client.post(f"/db/songs/{sid}/notes", data={"file": (io.BytesIO(_png()), "a.png")},
+                               content_type="multipart/form-data", headers=h)
+    assert up({}).status_code == 401
+    nid = up(pw).get_json()["added"][0]["id"]
+    assert client.delete(f"/db/notes/{nid}").status_code == 401
+    assert client.patch(f"/db/notes/{nid}", json={"name": "x"}).status_code == 401
+    assert client.get(f"/db/notes/{nid}").status_code == 200              # stranica čita
+    assert client.get(f"/api/v1/notes/{nid}").status_code == 401           # API traži token
+    assert client.get(f"/api/v1/notes/{nid}?token=tok").status_code == 200

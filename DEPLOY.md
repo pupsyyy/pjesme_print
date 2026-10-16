@@ -87,14 +87,38 @@ docker compose up -d --build
 - Bez ovih varijabli sve radi bez lozinke (u redu ako je cijela stranica
   iza Caddy `basic_auth`).
 
-**Backup** (dok aplikacija radi, sigurno):
+**Backup** (dok aplikacija radi, sigurno) — baza + mapa s notama:
 
 ```bash
 docker compose exec pjesme python -c "import sqlite3; s=sqlite3.connect('/app/data/pjesme.db'); d=sqlite3.connect('/app/data/backup.db'); s.backup(d); d.close()"
 cp data/backup.db ~/pjesme-$(date +%F).db
+tar czf ~/pjesme-note-$(date +%F).tgz -C data note     # note (PDF/slike/MusicXML)
 ```
 
 ili `curl .../api/v1/export > pjesme.json` (sve pjesme kao JSON).
+
+### Prepoznavanje nota iz PDF-a (neobavezno — Audiveris)
+
+Gumb „🔍 Prepoznaj" (PDF/slika nota → MusicXML) postoji samo ako je Docker
+slika izgrađena s Audiverisom. Slika je tada ~350 MB veća, a jedno
+prepoznavanje traje ≈ pola minute po stranici i treba **~1 GB RAM-a** (radi
+jedno po jedno, u pozadini). Uključivanje:
+
+```bash
+cd /opt/pjesme_print
+echo "WITH_OMR=1" >> .env
+docker compose up -d --build     # prvi put preuzme Audiveris (~80 MB) i jezike za tekst
+```
+
+Isključivanje: obriši redak `WITH_OMR=1` iz `.env` i ponovo `docker compose up -d --build`.
+Provjera: `docker compose exec pjesme ls /opt/audiveris/bin/Audiveris`.
+Na serveru s malo RAM-a (2 GB) prepoznavanje može usporiti ostalo dok radi.
+
+### Veličina uvoza (ZIP)
+
+`MAX_UPLOAD_MB` u `docker-compose.yml` (zadano 200) je najveća datoteka koja
+se može poslati — i za ZIP s više PDF-ova. Veliki ZIP se obrađuje u jednom
+zahtjevu (do 15 min, gunicorn `--timeout 900`); Caddy nema ograničenje.
 
 ### Korisne naredbe
 
