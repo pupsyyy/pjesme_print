@@ -455,8 +455,8 @@ DB_PAGE = r"""<!doctype html>
   .search input { width: 100%; background: var(--panel2); border: 1px solid var(--border);
                   border-radius: 10px; padding: .5rem .7rem; font-size: .9rem; }
   .search input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
-  .tagbar { display: flex; gap: .35rem; padding: 0 .8rem .6rem; overflow-x: auto; flex: none;
-            scrollbar-width: thin; }
+  .tagbar { display: flex; flex-wrap: wrap; gap: .3rem; padding: 0 .8rem .6rem; flex: none;
+            max-height: 7.5rem; overflow-y: auto; }
   .tag { font-family: var(--ui); font-size: .74rem; font-weight: 500; white-space: nowrap;
          border: 1px solid var(--border); background: var(--panel2); color: var(--text);
          border-radius: 999px; padding: .15rem .55rem; cursor: pointer; line-height: 1.5;

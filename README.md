@@ -71,7 +71,19 @@ Na stvarnim PDF-ovima: **17/17 pjesama identično** (3 744 znaka, odstupanje
 python3 tools/roundtrip.py izvor.pdf [još.pdf ...] [--png slike/]
 ```
 
-Iz baze: pretraga (naslov, broj, tekst, bez obzira na dijakritike),
+**Oznake** (Ulazna, Gospodine — nepromjenjivi dijelovi mise, Psalam,
+Aleluja, Prinos, Pričest, Klanjanje, Završna, Marijanska, Korizma, Kroz
+godinu, i vlastite): jedna pjesma može imati više oznaka. Kod uvoza se
+oznake **automatski predlože** — prema nazivu pjesmarice (npr.
+„…_Klanjanje.pdf" → Klanjanje), liturgijskom tekstu (Gospodine smiluj se,
+Slava Bogu na visini, Svet… Hosana, Jaganjče Božji… smiluj se), naslovu
+(Psalam, Aleluja) i ključnim riječima (klanjanje, pričest, korizma, Marija,
+prinos). Prijedlog je isprekidan — klik ga potvrdi, ✕ makne. Ulazna,
+Završna i Kroz godinu su liturgijski izbor pa se uglavnom dodaju ručno ili
+skupno (filtriraj, „☑ Sve", „+ oznaka"). Gumb „✨ Predloži oznake" radi
+prijedlog za pjesme koje ga još nisu dobile (npr. one uvezene prije oznaka).
+
+Iz baze: pretraga (naslov, broj, tekst, bez obzira na dijakritike), filter po oznaci,
 pregled s akordima, preuzimanje PDF-a (izvorni izgled), ChordPro i JSON,
 te **„Napravi pjesmaricu"** — odabrane pjesme otvore se u uredniku
 (kompaktno/klasično, PDF/Word).
@@ -81,7 +93,8 @@ te **„Napravi pjesmaricu"** — odabrane pjesme otvore se u uredniku
 | Zahtjev | Odgovor |
 |---|---|
 | `GET /api/v1` | broj pjesama, popis endpointa |
-| `GET /api/v1/songs?q=&limit=&offset=` | popis (id, naslov, podnaslov, key, brojevi) |
+| `GET /api/v1/songs?q=&tag=&limit=&offset=` | popis (id, naslov, podnaslov, key, brojevi, oznake); `tag=-` = bez oznake |
+| `GET /api/v1/tags` | oznake s brojem pjesama |
 | `GET /api/v1/songs/<id>` | cijela pjesma: `meta`, `sections` (tekst + akordi), `lyrics`, `chordpro`, `sources` |
 | `GET /api/v1/songs/<id>.cho` | ChordPro tekst |
 | `GET /api/v1/songs/<id>.pdf` | PDF u izvornom izgledu |

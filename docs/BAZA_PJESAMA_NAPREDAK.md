@@ -134,3 +134,13 @@ Plan: tablice tags + song_tags(source auto|user); songtags.py pravila:
  - Ulazna/Završna/Kroz godinu → samo iz naziva izvora ili ručno
 Auto oznake = prijedlog (isprekidani rub), klik = potvrdi, ✕ = makni. Filter po oznaci, skupno dodavanje.
 PR #17 (Tabor) još nije spojen → nastavak na istoj grani.
+
+## Status faze 3 (oznake)
+- [x] songtags.py (DEFAULT_TAGS 11, SOURCE_RULES, liturgijski tekst, KEYWORD_RULES s pragovima)
+      evaluacija na 126 pjesama: Klanjanje 14 (izvor klajanje), Aleluja 5, Marijanska 8, Korizma 7-8,
+      Pričest 3-5, Ulazna 2, Prinos 1, Psalam 1; 84 bez prijedloga (opće pjesme hvale) — namjerno oprezno
+- [x] songdb: tags, song_tags(source auto|user), songs.tagged (migracija), suggest_all, bulk_tag, filter tag/"-"
+- [x] web: /db/tags, /db/tags/suggest, /db/tags/bulk, /db/songs/<id>/tags (POST/DELETE), /api/v1/tags, ?tag=
+- [x] UI: traka oznaka (filter + "bez oznake" + ✨ Predloži), oznake u popisu, uređivanje na pjesmi,
+      ☑ Sve + skupna oznaka; testirano u pregledniku (Playwright), 72 testa prolaze
+- [ ] PR #17 opis dopuniti, CI
