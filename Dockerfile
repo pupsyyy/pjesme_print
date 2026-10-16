@@ -14,8 +14,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY pdf_to_word.py pdf_writer.py watermark.py app.py VERSION \
-     opensans.py chord_extract.py chord_render.py songdb.py songdb_web.py ./
+# svi Python moduli iz korijena repoa (testovi i alati su u .dockerignore) —
+# novi modul se tako ne može zaboraviti na popisu
+COPY *.py VERSION ./
 COPY assets/ ./assets/
 COPY static/ ./static/
 
