@@ -122,3 +122,15 @@ Pravilo duplikata (korisnik 2026-10-16): "ako već imamo pjesmu ne dodajemo je, 
       pita 1 (Jona, Tabor ima više kitica). Migracija: pending.reason (ALTER TABLE).
 - [x] testovi Word formata (sintetska pjesmarica) — 67 prolazi
 - [ ] PR
+
+---
+# Faza 3 — oznake (tagovi) pjesama (zahtjev 2026-10-16)
+Korisnik: oznake npr. Klanjanje, Ulazna, Završna, Pričest, Gospodine (nepromjenjivi dio mise),
+Psalam, Korizma, Kroz godinu; pjesma može imati više oznaka; "možeš li sam prepoznati".
+Plan: tablice tags + song_tags(source auto|user); songtags.py pravila:
+ - izvor (naziv PDF-a: klanjanje/klajanje, pričest, kroz godinu, korizma...) → jako
+ - naslov: psalam, Gospodine smiluj se/Slava/Svet/Jaganjče/Agnus Dei, Aleluja → jako
+ - ključne riječi u tekstu (Klanjanje, Pričest, Korizma, Marijanska, Prinos) → prijedlog
+ - Ulazna/Završna/Kroz godinu → samo iz naziva izvora ili ručno
+Auto oznake = prijedlog (isprekidani rub), klik = potvrdi, ✕ = makni. Filter po oznaci, skupno dodavanje.
+PR #17 (Tabor) još nije spojen → nastavak na istoj grani.
