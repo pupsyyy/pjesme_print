@@ -618,6 +618,54 @@ DB_PAGE = r"""<!doctype html>
   .note .sub { color: var(--muted); font-size: .72rem; word-break: break-word; }
   .note .acts { display: flex; gap: .3rem; flex-wrap: wrap; }
   .note .acts .btn { padding: .2rem .5rem; font-size: .75rem; }
+  .tag.zb { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+  .tag.hid { opacity: .55; text-decoration: line-through; }
+  .tag .eye { font-size: .85em; opacity: .75; }
+  .tag .eye:hover { opacity: 1; }
+  .imptags { padding: 0 .8rem .6rem; }
+  .imptags input { width: 100%; background: var(--panel2); border: 1px solid var(--border);
+                   border-radius: 10px; padding: .4rem .7rem; font-size: .8rem; }
+  .imptags input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+  .badge { font-family: var(--ui); font-size: .66rem; border-radius: 999px; padding: 0 .4rem;
+           border: 1px dashed var(--border); color: var(--muted); margin-left: .3rem; white-space: nowrap; }
+  .note .st { font-family: var(--ui); font-size: .72rem; color: var(--accent); }
+  .note .st.bad { color: var(--err); }
+  .links { border: 1px solid var(--border); border-radius: 12px; padding: .6rem .8rem;
+           margin: -.2rem 0 1.1rem; background: var(--panel2); }
+  .links .head { display: flex; align-items: center; gap: .6rem; font-family: var(--ui);
+                 font-weight: 600; font-size: .9rem; }
+  .linkrow { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .35rem 0;
+             border-bottom: 1px solid var(--border); font-family: var(--ui); font-size: .84rem; }
+  .linkrow:last-of-type { border-bottom: 0; }
+  .linkrow .voice { font-weight: 600; min-width: 5.5rem; }
+  .linkrow .lt { color: var(--muted); word-break: break-all; flex: 1; min-width: 8rem; }
+  .linkrow .btn { padding: .2rem .5rem; font-size: .75rem; }
+  .player { width: 100%; margin: .2rem 0 .5rem; }
+  .player iframe { width: 100%; max-width: 640px; border: 0; border-radius: 10px; background: #000; display: block; }
+  .player iframe.yt { aspect-ratio: 16 / 9; }
+  .player iframe.drive { height: 180px; background: var(--panel); }
+  .player audio { width: 100%; max-width: 640px; }
+  .addlink { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .5rem; }
+  .addlink select, .addlink input { background: var(--panel); border: 1px solid var(--border);
+         border-radius: 8px; padding: .3rem .5rem; font-size: .8rem; font-family: var(--ui); }
+  .addlink input.url { flex: 1; min-width: 12rem; }
+  .info { border-left: 3px solid var(--accent); padding: .4rem .7rem; margin: 0 0 1rem;
+          background: var(--panel2); border-radius: 6px; font-size: .88rem; }
+  .modal { position: fixed; inset: 0; background: rgba(20,20,19,.6); z-index: 25; display: flex;
+           align-items: center; justify-content: center; padding: 1rem; }
+  .modal .win { background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+                box-shadow: var(--shadow); width: min(1100px, 100%); max-height: 100%; display: flex;
+                flex-direction: column; min-height: 0; }
+  .modal .bar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; padding: .6rem .8rem;
+                border-bottom: 1px solid var(--border); font-family: var(--ui); font-size: .85rem; }
+  .modal .bar select, .modal .bar input { background: var(--panel2); border: 1px solid var(--border);
+                border-radius: 8px; padding: .25rem .5rem; font-family: var(--ui); }
+  .modal .body { overflow: auto; padding: .8rem; min-height: 0; }
+  .modal .score { background: #fff; border-radius: 8px; padding: .5rem; }
+  .modal .score svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+  .picklist { list-style: none; margin: .5rem 0 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+  .picklist li { padding: .4rem .6rem; border-radius: 8px; cursor: pointer; font-family: var(--ui); font-size: .88rem; }
+  .picklist li:hover { background: var(--ring); }
   #pendingBar { margin: 0 .8rem .6rem; padding: .55rem .7rem; border-radius: 10px; cursor: pointer;
                 border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel));
                 font-family: var(--ui); font-size: .85rem; }
@@ -711,10 +759,13 @@ DB_PAGE = r"""<!doctype html>
 <div class="layout">
   <aside>
     <div id="drop">
-      <b>＋ Uvezi PDF-ove</b> (klikni ili dovuci)
-      <small>Više datoteka odjednom · do __MAX_MB__ MB po datoteci</small>
-      <input type="file" id="fileInput" accept=".pdf,application/pdf" multiple hidden>
+      <b>＋ Uvezi PDF-ove ili ZIP</b> (klikni ili dovuci)
+      <small>Tekst, akordi i note (i skenirane) · ZIP s više datoteka · do __MAX_MB__ MB po datoteci</small>
+      <input type="file" id="fileInput" accept=".pdf,.zip,application/pdf,application/zip,__NOTE_ACCEPT__" multiple hidden>
     </div>
+    <div class="imptags"><input id="importTags" type="text" autocomplete="off"
+      placeholder="Oznake za nove pjesme iz uvoza, npr. #pučkepjesme #velikizbor"
+      title="Sve NOVE pjesme iz sljedećeg uvoza dobiju ove oznake (pjesme koje već imamo ne). Oznake zbirki možeš sakriti u popisu (👁)."></div>
     <div id="pendingBar" class="hidden"></div>
     <div class="search"><input id="q" type="search" placeholder="Traži naslov, broj, tekst…" autocomplete="off"></div>
     <div class="tagbar" id="tagbar"></div>
@@ -733,6 +784,8 @@ DB_PAGE = r"""<!doctype html>
       <h2>Ubaci PDF-ove pjesama</h2>
       <p>Iz svakog PDF-a izvlače se pjesme s tekstom, metapodacima i akordima<br>
          (svaki akord pamti točno slovo iznad kojeg stoji).</p>
+      <p>Stranice s <b>notama</b> spremaju se kao note uz svoju pjesmu (po naslovu ili
+         tekstu ispod nota). Može i <b>ZIP</b> s više PDF-ova i datoteka nota odjednom.</p>
       <p>Pjesme koje već imamo ne dodaju se (ni druga verzija iste pjesme).<br>
          Pita te samo kad nova verzija ima više teksta ili kad je tekst ≥ 80 %
          sličan pjesmi drugog naslova.</p>
@@ -752,8 +805,12 @@ DB_PAGE = r"""<!doctype html>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const state = { songs: [], total: 0, sel: new Set(), current: null, q: "", tag: "", tags: [], untagged: 0 };
-const PW_KEY = "pjesme-dbpw", DRAFT_KEY = "pjesme-draft";
+const state = { songs: [], total: 0, sel: new Set(), current: null, q: "", tag: "", tags: [], untagged: 0,
+                hidden: new Set() };
+const PW_KEY = "pjesme-dbpw", DRAFT_KEY = "pjesme-draft", HIDDEN_KEY = "pjesme-hidden-tags";
+const OMR = __OMR__, VOICES = __VOICES__;
+const VEROVIO_URL = "https://cdn.jsdelivr.net/npm/verovio@6.3.0/dist/verovio-toolkit-wasm.js";
+try { state.hidden = new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]")); } catch (_e) {}
 
 function applyTheme(t) {
   document.body.classList.toggle("light", t === "light");
@@ -867,8 +924,10 @@ function showView(node, quiet) {
 
 /* ── Popis ── */
 async function loadList() {
+  const exclude = [...state.hidden].filter(t => t !== state.tag).join(",");
   const data = await json(await fetch("db/songs?limit=1000&q=" + encodeURIComponent(state.q) +
-                                      "&tag=" + encodeURIComponent(state.tag)));
+                                      "&tag=" + encodeURIComponent(state.tag) +
+                                      "&exclude=" + encodeURIComponent(exclude)));
   state.songs = data.items; state.total = data.total;
   renderList();
 }
@@ -886,10 +945,23 @@ async function loadTags() {
   all.onclick = () => setTagFilter("");
   bar.append(all);
   d.tags.filter(t => t.count || state.tag === t.name).forEach(t => {
-    const c = el("span", "tag" + (state.tag === t.name ? " on" : ""));
+    const zb = t.group === "zbirka", hid = state.hidden.has(t.name);
+    const c = el("span", "tag" + (state.tag === t.name ? " on" : "") + (zb ? " zb" : "") + (hid ? " hid" : ""));
     c.append(document.createTextNode(t.name + " "), el("span", "n", String(t.count)));
-    c.title = t.description || t.name;
+    c.title = (t.description || t.name) + (zb ? " — zbirka" : "");
     c.onclick = () => setTagFilter(state.tag === t.name ? "" : t.name);
+    if (zb || hid) {
+      const eye = el("span", "eye", hid ? "🚫" : "👁");
+      eye.title = hid ? "Skriveno u popisu — klikni da se opet prikazuje"
+                      : "Sakrij pjesme s ovom oznakom iz popisa (npr. koje nam inače ne trebaju)";
+      eye.onclick = e => {
+        e.stopPropagation();
+        hid ? state.hidden.delete(t.name) : state.hidden.add(t.name);
+        try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...state.hidden])); } catch (_e) {}
+        loadTags(); loadList().catch(er => toast(er.message, true));
+      };
+      c.append(eye);
+    }
     bar.append(c);
   });
   if (d.untagged) {
@@ -924,7 +996,9 @@ function renderList() {
     const cb = el("input"); cb.type = "checkbox"; cb.checked = state.sel.has(s.id);
     cb.onclick = e => { e.stopPropagation(); cb.checked ? state.sel.add(s.id) : state.sel.delete(s.id); renderSel(); };
     const box = el("div");
-    box.append(el("div", "t", s.title + (s.notes_count ? "  🎼" : "")));
+    const t = el("div", "t", s.title + (s.notes_count ? "  🎼" : "") + (s.links_count ? " 🎧" : ""));
+    if (!s.has_text) t.append(el("span", "badge", "samo note"));
+    box.append(t);
     const meta = [s.subtitle, s.key && ("Key: " + s.key), (s.numbers || []).join(", ")].filter(Boolean).join(" · ");
     if (meta) box.append(el("div", "m", meta));
     if ((s.tags || []).length) {
@@ -939,6 +1013,8 @@ function renderList() {
   if (!state.songs.length) ul.append(el("li", "muted", state.q ? "Nema rezultata." : "Baza je prazna."));
   if (state.total > state.songs.length)
     ul.append(el("li", "muted", "Prikazano " + state.songs.length + " od " + state.total + " — suzi pretragu."));
+  const hidden = [...state.hidden].filter(t => t !== state.tag);
+  if (hidden.length) ul.append(el("li", "muted", "Skriveno oznakama: " + hidden.join(", ") + " (👁 u oznakama)"));
   renderSel();
 }
 function renderSel() {
@@ -1015,7 +1091,9 @@ function fmtSize(n) {
 }
 const NOTE_ICON = { pdf: "📄", image: "🖼", musicxml: "🎼", musescore: "🎼", midi: "🎹" };
 const NOTE_KIND = { pdf: "PDF", image: "slika", musicxml: "MusicXML", musescore: "MuseScore", midi: "MIDI" };
-function renderNotes(s) {
+const NOTE_ORIGIN = { "import": "iz uvoza", omr: "prepoznato (Audiveris)" };
+let omrTimer = null;
+function renderNotes(s, jobs) {
   const box = el("div", "notes");
   const head = el("div", "head");
   head.append(el("span", null, "🎼 Note"), el("span", "grow"));
@@ -1029,6 +1107,8 @@ function renderNotes(s) {
     box.append(el("p", "empty-n", "Nema nota. Dodaj PDF ili sliku nota, MusicXML ili MuseScore datoteku."));
     return box;
   }
+  const byNote = {};
+  (jobs || []).forEach(j => { byNote[j.note_id] = j; });
   const list = el("div", "notelist");
   notes.forEach(n => {
     const card = el("div", "note");
@@ -1038,12 +1118,32 @@ function renderNotes(s) {
       const img = el("img"); img.src = url; img.alt = n.name; img.loading = "lazy";
       thumb.append(img);
     } else thumb.textContent = NOTE_ICON[n.kind] || "📎";
-    thumb.title = n.inline ? "Otvori" : "Preuzmi";
-    thumb.onclick = () => window.open(n.inline ? url : url + "?download=1", "_blank");
+    const viewable = n.kind === "musicxml";
+    thumb.title = viewable ? "Prikaži note" : n.inline ? "Otvori" : "Preuzmi";
+    thumb.onclick = () => viewable ? showScore(n, s) : window.open(n.inline ? url : url + "?download=1", "_blank");
     card.append(thumb, el("div", "nm", n.name),
-                el("div", "sub", (NOTE_KIND[n.kind] || n.kind) + " · " + fmtSize(n.size) + " · " + n.filename));
+                el("div", "sub", [NOTE_KIND[n.kind] || n.kind, fmtSize(n.size), NOTE_ORIGIN[n.origin], n.filename]
+                                   .filter(Boolean).join(" · ")));
+    const job = byNote[n.id];
+    if (job && (job.status === "queued" || job.status === "running"))
+      card.append(el("div", "st", "⏳ Prepoznajem note… (≈ pola minute po stranici)"));
+    else if (job && job.status === "error") card.append(el("div", "st bad", "✕ " + job.message));
     const acts = el("div", "acts");
+    if (viewable) { const v = el("button", "btn", "▶ Prikaži"); v.title = "Note u pregledniku, s transpozicijom";
+                    v.onclick = () => showScore(n, s); acts.append(v); }
     if (n.inline) { const o = el("a", "btn", "Otvori"); o.href = url; o.target = "_blank"; acts.append(o); }
+    if (OMR && (n.kind === "pdf" || n.kind === "image") &&
+        !(job && (job.status === "queued" || job.status === "running"))) {
+      const o = el("button", "btn", "🔍 Prepoznaj");
+      o.title = "Pročitaj note (Audiveris) i spremi ih kao MusicXML — za prikaz, transpoziciju i MuseScore";
+      o.onclick = async () => {
+        try { await json(await api(url + "/omr", { method: "POST" }));
+              toast("Prepoznavanje je pokrenuto — rezultat se pojavi ovdje kad bude gotov.");
+              openSong(s.id, true); }
+        catch (e) { toast(e.message, true); }
+      };
+      acts.append(o);
+    }
     const d = el("a", "btn", "⬇"); d.href = url + "?download=1"; d.title = "Preuzmi";
     const r = el("button", "btn", "✎"); r.title = "Preimenuj (npr. Sopran, Gitara, Klavir)";
     r.onclick = async () => {
@@ -1054,19 +1154,205 @@ function renderNotes(s) {
             openSong(s.id, true); }
       catch (e) { toast(e.message, true); }
     };
+    const m = el("button", "btn", "⇄"); m.title = "Premjesti na drugu pjesmu (ako su pogrešno pridružene)";
+    m.onclick = () => pickSong("Premjesti note „" + n.name + "” na pjesmu:", s.id, async target => {
+      try { await json(await api(url + "/move", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                  body: JSON.stringify({ song_id: target.id }) }));
+            toast("Note premještene na „" + target.title + "”.");
+            await refreshAll(); openSong(target.id); }
+      catch (e) { toast(e.message, true); }
+    });
     const x = el("button", "btn danger", "✕"); x.title = "Obriši note";
     x.onclick = async () => {
       if (!confirm("Obrisati note „" + n.name + "”?")) return;
       try { await json(await api(url, { method: "DELETE" })); await refreshAll(); }
       catch (e) { toast(e.message, true); }
     };
-    acts.append(d, r, x);
+    acts.append(d, r, m, x);
     card.append(acts);
     list.append(card);
   });
   box.append(list);
   return box;
 }
+
+/* ── Snimke: YouTube po glasovima, Google disk, audio ── */
+const LINK_ICON = { youtube: "▶️", drive: "☁️", audio: "🎵", link: "🔗" };
+function renderLinks(s) {
+  const box = el("div", "links");
+  const head = el("div", "head");
+  head.append(el("span", null, "🎧 Snimke"), el("span", "grow"));
+  box.append(head);
+  const links = s.links || [];
+  if (!links.length) box.append(el("p", "empty-n muted", "Nema snimki. Dodaj YouTube link (npr. za svaki glas) ili audio s Google diska."));
+  links.forEach(l => {
+    const row = el("div", "linkrow");
+    row.append(el("span", "voice", (LINK_ICON[l.kind] || "🔗") + " " + (l.voice || "Snimka")));
+    row.append(el("span", "lt", l.title || l.url));
+    const player = el("div", "player hidden");
+    if (l.embed) {
+      const play = el("button", "btn", "▶ Slušaj");
+      play.onclick = () => {
+        if (!player.classList.contains("hidden")) { player.innerHTML = ""; player.classList.add("hidden");
+                                                    play.textContent = "▶ Slušaj"; return; }
+        player.innerHTML = "";
+        if (l.kind === "audio") {
+          const a = el("audio"); a.controls = true; a.src = l.embed; a.preload = "none"; player.append(a);
+        } else {
+          const f = el("iframe", l.kind === "youtube" ? "yt" : "drive");
+          f.src = l.embed; f.loading = "lazy"; f.referrerPolicy = "strict-origin-when-cross-origin";
+          f.allow = "autoplay; encrypted-media; picture-in-picture; fullscreen"; f.allowFullscreen = true;
+          player.append(f);
+        }
+        player.classList.remove("hidden"); play.textContent = "■ Zatvori";
+      };
+      row.append(play);
+    }
+    const open = el("a", "btn", "↗"); open.href = l.url; open.target = "_blank"; open.rel = "noopener noreferrer";
+    open.title = "Otvori u novoj kartici";
+    const ed = el("button", "btn", "✎"); ed.title = "Promijeni glas / naziv";
+    ed.onclick = async () => {
+      const voice = prompt("Glas (" + VOICES.join(", ") + " ili drugo):", l.voice);
+      if (voice === null) return;
+      const title = prompt("Naziv (neobavezno):", l.title);
+      if (title === null) return;
+      try { await json(await api("db/links/" + l.id, { method: "PATCH", headers: { "Content-Type": "application/json" },
+                                                      body: JSON.stringify({ voice, title }) }));
+            openSong(s.id, true); }
+      catch (e) { toast(e.message, true); }
+    };
+    const x = el("button", "btn danger", "✕"); x.title = "Obriši snimku";
+    x.onclick = async () => {
+      if (!confirm("Obrisati snimku " + (l.voice || l.url) + "?")) return;
+      try { await json(await api("db/links/" + l.id, { method: "DELETE" })); await refreshAll(); }
+      catch (e) { toast(e.message, true); }
+    };
+    row.append(open, ed, x);
+    box.append(row, player);
+  });
+  const form = el("div", "addlink");
+  const voice = el("select");
+  VOICES.forEach(v => voice.append(new Option(v, v)));
+  voice.append(new Option("drugo…", "__other__"));
+  const urlIn = el("input", "url"); urlIn.type = "url";
+  urlIn.placeholder = "YouTube ili Google disk link (drive.google.com/file/d/…)";
+  const titleIn = el("input"); titleIn.placeholder = "naziv (neobavezno)"; titleIn.style.width = "9rem";
+  const add = el("button", "btn primary", "＋ Dodaj");
+  const submit = async () => {
+    let v = voice.value;
+    if (v === "__other__") { v = (prompt("Naziv glasa / snimke:") || "").trim(); if (!v) return; }
+    try {
+      await json(await api("db/songs/" + s.id + "/links", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                           body: JSON.stringify({ url: urlIn.value, voice: v, title: titleIn.value }) }));
+      toast("Snimka dodana."); await refreshAll();
+    } catch (e) { toast(e.message, true); }
+  };
+  add.onclick = submit;
+  urlIn.onkeydown = e => { if (e.key === "Enter") submit(); };
+  form.append(voice, urlIn, titleIn, add);
+  box.append(form);
+  box.append(el("div", "muted", "Google disk: datoteka mora biti dijeljena s „Svi koji imaju link”."));
+  box.lastChild.style.fontSize = ".75rem";
+  return box;
+}
+
+/* ── Odabir pjesme (premještanje nota) ── */
+function pickSong(title, excludeId, onPick) {
+  const modal = el("div", "modal");
+  const win = el("div", "win"); win.style.width = "min(560px, 100%)";
+  const bar = el("div", "bar");
+  bar.append(el("b", null, title), el("span", "grow"));
+  const close = el("button", "btn", "✕"); close.onclick = () => modal.remove();
+  bar.append(close);
+  const body = el("div", "body");
+  const q = el("input"); q.type = "search"; q.placeholder = "Traži naslov ili tekst…"; q.style.width = "100%";
+  q.className = "search"; q.style.padding = ".45rem .7rem";
+  const ul = el("ul", "picklist");
+  let t = null;
+  const search = async () => {
+    const d = await json(await fetch("db/songs?limit=50&q=" + encodeURIComponent(q.value.trim())));
+    ul.innerHTML = "";
+    d.items.filter(x => x.id !== excludeId).forEach(x => {
+      const li = el("li", null, x.title + (x.subtitle ? " — " + x.subtitle : ""));
+      if (!x.has_text) li.append(el("span", "badge", "samo note"));
+      li.onclick = () => { modal.remove(); onPick(x); };
+      ul.append(li);
+    });
+    if (!ul.children.length) ul.append(el("li", "muted", "Nema rezultata."));
+  };
+  q.oninput = () => { clearTimeout(t); t = setTimeout(() => search().catch(e => toast(e.message, true)), 200); };
+  body.append(q, ul);
+  win.append(bar, body); modal.append(win);
+  modal.onclick = e => { if (e.target === modal) modal.remove(); };
+  document.body.append(modal);
+  q.focus(); search().catch(e => toast(e.message, true));
+}
+
+/* ── Prikaz MusicXML nota (Verovio), transpozicija ── */
+let verovioReady = null;
+function loadVerovio() {
+  if (!verovioReady) verovioReady = new Promise((resolve, reject) => {
+    const sc = document.createElement("script");
+    sc.src = VEROVIO_URL; sc.crossOrigin = "anonymous";
+    sc.onload = () => {
+      if (window.verovio && verovio.module) {
+        if (verovio.module.calledRun) resolve(); else verovio.module.onRuntimeInitialized = () => resolve();
+      } else reject(new Error("Preglednik nota se nije učitao."));
+    };
+    sc.onerror = () => { verovioReady = null; reject(new Error("Preglednik nota se ne može učitati (nema interneta?).")); };
+    document.head.append(sc);
+  });
+  return verovioReady;
+}
+async function showScore(n, s) {
+  busy("Učitavam note…");
+  let tk, buf;
+  try {
+    const [, res] = await Promise.all([loadVerovio(), fetch("db/notes/" + n.id)]);
+    if (!res.ok) await json(res);
+    buf = await res.arrayBuffer();
+    tk = new verovio.toolkit();
+  } catch (e) { busy(null); toast(e.message, true); return; }
+  busy(null);
+  const modal = el("div", "modal");
+  const win = el("div", "win");
+  const bar = el("div", "bar");
+  bar.append(el("b", null, s.title + " — " + n.name), el("span", "grow"));
+  const tr = el("select"); tr.title = "Transponiraj (polutonovi)";
+  for (let k = -6; k <= 6; k++) tr.append(new Option(k === 0 ? "izvorni ton" : (k > 0 ? "+" : "") + k + " polut.", String(k)));
+  tr.value = "0";
+  const zoom = el("select"); zoom.title = "Veličina";
+  [["30", "sitno"], ["40", "normalno"], ["55", "veće"]].forEach(([v, t]) => zoom.append(new Option(t, v)));
+  zoom.value = "40";
+  const prev = el("button", "btn", "◀"), next = el("button", "btn", "▶"), info = el("span", "muted");
+  const dl = el("a", "btn", "⬇ MusicXML"); dl.href = "db/notes/" + n.id + "?download=1";
+  const close = el("button", "btn", "✕ Zatvori"); close.onclick = () => modal.remove();
+  bar.append(el("span", null, "Transpozicija:"), tr, zoom, prev, info, next, dl, close);
+  const body = el("div", "body"), score = el("div", "score");
+  body.append(score);
+  win.append(bar, body); modal.append(win);
+  modal.onclick = e => { if (e.target === modal) modal.remove(); };
+  document.body.append(modal);
+  let page = 1, pages = 1;
+  const isZip = new Uint8Array(buf.slice(0, 2))[0] === 0x50;
+  const text = isZip ? null : new TextDecoder().decode(buf);
+  const render = () => {
+    tk.setOptions({ scale: Number(zoom.value), transpose: tr.value === "0" ? "" : tr.value,
+                    pageWidth: Math.max(800, Math.round((body.clientWidth - 30) * 100 / Number(zoom.value))),
+                    adjustPageHeight: true, footer: "none" });
+    const ok = isZip ? tk.loadZipDataBuffer(buf) : tk.loadData(text);
+    if (!ok) { score.textContent = "Note se ne mogu prikazati (neispravan MusicXML)."; return; }
+    pages = tk.getPageCount(); page = Math.min(page, pages);
+    score.innerHTML = tk.renderToSVG(page);
+    info.textContent = page + " / " + pages;
+    prev.disabled = page <= 1; next.disabled = page >= pages;
+  };
+  tr.onchange = zoom.onchange = render;
+  prev.onclick = () => { page--; render(); };
+  next.onclick = () => { page++; render(); };
+  try { render(); } catch (e) { score.textContent = "Greška pri prikazu: " + e.message; }
+}
+
 $("noteInput").onchange = async () => {
   const input = $("noteInput"), id = input.dataset.song, files = [...input.files];
   input.value = "";
@@ -1095,7 +1381,17 @@ async function openSong(id, keepScroll) {
     head.append(el("span", "chip", "#" + s.id));
     box.append(head);
     box.append(renderSongTags(s));
-    box.append(renderNotes(s));
+    if (!s.has_text) box.append(el("div", "info", "Pjesma zasad ima samo note. Tekst (i akordi) dodaju se sami " +
+                                   "kad uvezeš PDF s tekstom pjesme istog naslova."));
+    let jobs = [];
+    if (OMR && (s.notes || []).length) {
+      try { jobs = (await json(await fetch("db/songs/" + id + "/omr"))).jobs; } catch (_e) {}
+    }
+    box.append(renderNotes(s, jobs));
+    box.append(renderLinks(s));
+    clearTimeout(omrTimer);
+    if (jobs.some(j => j.status === "queued" || j.status === "running"))
+      omrTimer = setTimeout(() => { if (state.current === id) refreshAll(); }, 5000);
     const act = el("div", "actions");
     const a1 = el("a", "btn", "⬇ PDF (izvorni izgled)"); a1.href = "db/songs/" + id + "/pdf";
     const a2 = el("a", "btn", "⬇ ChordPro"); a2.href = "db/songs/" + id + "/chordpro";
@@ -1128,26 +1424,34 @@ $("fileInput").onchange = () => { importFiles([...$("fileInput").files]); $("fil
 ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", e => importFiles([...e.dataTransfer.files]));
 
+const IMPORT_EXT = [".pdf", ".zip", ..."__NOTE_ACCEPT__".split(",")];
 async function importFiles(files) {
-  files = files.filter(f => f.name.toLowerCase().endsWith(".pdf"));
-  if (!files.length) { toast("Odaberi PDF datoteke.", true); return; }
+  files = files.filter(f => IMPORT_EXT.some(x => f.name.toLowerCase().endsWith(x)));
+  if (!files.length) { toast("Odaberi PDF, ZIP ili datoteke nota.", true); return; }
+  const tags = $("importTags").value.trim();
   const reports = [];
+  let usedTags = [];
   try {
     for (let i = 0; i < files.length; i++) {
-      busy("Uvozim " + (i + 1) + "/" + files.length + ": " + files[i].name);
-      const fd = new FormData(); fd.append("pdf", files[i]);
+      const zip = files[i].name.toLowerCase().endsWith(".zip");
+      busy("Uvozim " + (i + 1) + "/" + files.length + ": " + files[i].name +
+           (zip ? " (ZIP s puno datoteka može potrajati par minuta)" : ""));
+      const fd = new FormData(); fd.append("file", files[i]); fd.append("tags", tags);
       try {
         const data = await json(await api("db/import", { method: "POST", body: fd }));
-        reports.push(...data.reports);
+        reports.push(...data.reports); usedTags = data.tags || usedTags;
       } catch (e) { reports.push({ file: files[i].name, error: e.message }); }
     }
   } finally { busy(null); }
   await Promise.all([loadList(), refreshStats(), loadTags()]);
-  showReport(reports);
+  showReport(reports, usedTags);
 }
-function showReport(reports) {
+const NOTE_STATUS = { attached: "uz pjesmu", new_song: "nova pjesma (zasad samo note)",
+                      duplicate: "već imamo (preskočeno)", error: "greška" };
+function showReport(reports, tags) {
   const box = el("div");
   box.append(el("h2", null, "Uvoz završen"));
+  if (tags && tags.length) box.append(el("p", "muted", "Nove pjesme su dobile oznake: " + tags.join(", ")));
   let anyConflict = false;
   reports.forEach(r => {
     const c = el("div", "card");
@@ -1155,7 +1459,20 @@ function showReport(reports) {
     if (r.error) { c.append(el("div", "bad", "✕ " + r.error)); box.append(c); return; }
     const ul = el("ul", "rep");
     const li = (cls, t) => ul.append(el("li", cls, t));
-    li("ok", "✓ dodano: " + r.added.length + (r.added.length ? " — " + r.added.map(x => x.title).join(", ") : ""));
+    if (r.added.length || !(r.notes || []).length)
+      li("ok", "✓ dodano: " + r.added.length + (r.added.length ? " — " + r.added.map(x => x.title + (x.filled ? " (dopunjen tekst pjesme koja je imala samo note)" : "")).join(", ") : ""));
+    (r.notes || []).forEach(n => {
+      const item = el("li", n.status === "duplicate" ? "muted" : n.status === "error" ? "bad" : "ok");
+      item.append(document.createTextNode("🎼 note" + (n.title ? " „" + n.title + "”" : "") +
+                  (n.pages && n.pages.length ? " (str. " + n.pages.join(", ") + ")" : "") + " → "));
+      if (n.song_id) {
+        const a = el("a", null, n.song_title || ("#" + n.song_id)); a.href = "#";
+        a.onclick = e => { e.preventDefault(); openSong(n.song_id); };
+        item.append(a);
+      }
+      item.append(document.createTextNode(" · " + (NOTE_STATUS[n.status] || n.status) + (n.error ? ": " + n.error : "")));
+      ul.append(item);
+    });
     const same = r.duplicates.filter(x => x.reason === "same_song");
     const exact = r.duplicates.filter(x => x.reason !== "same_song");
     if (exact.length) li("muted", "= već u bazi, identične (preskočeno " + exact.length + "): " + exact.map(x => x.title).join(", "));
