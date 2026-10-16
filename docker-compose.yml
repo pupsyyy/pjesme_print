@@ -1,6 +1,12 @@
 services:
   pjesme:
-    build: .
+    build:
+      context: .
+      args:
+        # 1 = i prepoznavanje nota iz PDF-a (Audiveris -> MusicXML); slika je
+        # ~250 MB veća, a prepoznavanje treba ~1 GB RAM-a. Upiši WITH_OMR=1 u .env
+        # i ponovo izgradi: docker compose up -d --build
+        WITH_OMR: ${WITH_OMR:-0}
     container_name: pjesme_print
     restart: unless-stopped
     ports:

@@ -189,7 +189,8 @@ def run_audiveris(src, suffix=".pdf"):
         shutil.copyfile(src, inp)
         out = tmp / "out"
         out.mkdir()
-        env = dict(os.environ, HOME=str(tmp),
+        # GDK_SCALE: Audiveris inače učitava GTK (za HiDPI zaslon), kojeg na serveru nema
+        env = dict(os.environ, HOME=str(tmp), GDK_SCALE=os.environ.get("GDK_SCALE") or "1",
                    JAVA_TOOL_OPTIONS=(os.environ.get("JAVA_TOOL_OPTIONS", "") + " "
                                       + JAVA_OPTS + " -Djava.awt.headless=true").strip())
         if os.environ.get("OMR_TESSDATA"):
