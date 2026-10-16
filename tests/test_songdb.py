@@ -600,3 +600,100 @@ def test_word_songbook_web_import(client):
     assert len(rep["added"]) == 2 and not rep.get("error")
     rep = _upload(client, _word_songbook(), "tabor.pdf").get_json()["reports"][0]
     assert len(rep["duplicates"]) == 2 and not rep["added"]
+
+
+# ── Oznake ────────────────────────────────────────────────────────────────────
+
+def test_tag_suggestions_rules():
+    import songtags
+    s = _song_v2()
+    assert songtags.suggest(s, ["Papa band pjesmarica_Klanjanje.pdf"]) == ["Aleluja", "Klanjanje"]
+    assert songtags.suggest(s, ["klajanje (08-10-2025).pdf"]) == ["Aleluja", "Klanjanje"]
+    assert "Aleluja" in songtags.suggest(s)                      # naslov "Aleluja (...)"
+    def song(title, *lines):
+        return {"title": title, "sections": [{"label": None, "lines": [{"text": t, "chords": []} for t in lines]}]}
+    assert songtags.suggest(song("Psalam 34 (Gledajte u Gospodina)", "Kušajte i vidite")) == ["Psalam"]
+    assert songtags.suggest(song("Gospodine", "Gospodine, smiluj se", "Kriste, smiluj se")) == ["Gospodine"]
+    assert songtags.suggest(song("Svet", "Svet, svet, svet Gospodin Bog Sabaot", "Hosana u visini")) == ["Gospodine"]
+    # obrada "Agnus Dei" (pjesma hvale) nije liturgijski Jaganjče Božji
+    assert "Gospodine" not in songtags.suggest(song("Agnus Dei", "Aleluja", "Sveti, sveti, svet si Bože svemogući"))
+    assert songtags.suggest(song("Dođi Kruše života", "Ti skrivena tajno, u meni se nastani")) == ["Pričest"]
+    assert songtags.suggest(song("Zdravo Marijo", "Zdravo Marijo, milosti puna")) == ["Marijanska"]
+    assert songtags.suggest(song("Golgota", "Na križu za nas razapet")) == ["Korizma"]
+    assert songtags.suggest(song("Isuse znam da si tu", "Kruh i vino prinosimo Bože")) == ["Prinos"]
+    assert songtags.suggest(song("Bog te ljubi", "Tvoju su lađu vjetrovi odnijeli")) == []
+
+
+def test_tags_db_auto_confirm_remove_bulk_filter(conn):
+    r = songdb.import_songs(conn, [_song_v2()], "Papa band pjesmarica_Klanjanje.pdf")
+    sid = r["added"][0]["id"]
+    tags = songdb.get_song(conn, sid)["tags"]
+    assert {t["name"] for t in tags} == {"Aleluja", "Klanjanje"} and all(t["auto"] for t in tags)
+    assert songdb.list_tags(conn)["tags"][0]["name"] == "Ulazna"          # zadani popis
+    # potvrdi prijedlog, dodaj novu oznaku, makni prijedlog
+    songdb.set_tag(conn, sid, "Klanjanje")
+    songdb.set_tag(conn, sid, "Mladi")
+    songdb.remove_tag(conn, sid, "Aleluja")
+    assert songdb.get_song(conn, sid)["tags"] == [{"name": "Klanjanje", "auto": False},
+                                                  {"name": "Mladi", "auto": False}]
+    # ponovni prijedlog ne vraća maknute oznake
+    assert songdb.suggest_all(conn) == (0, 0)
+    assert songdb.list_songs(conn, tag="Mladi")["total"] == 1
+    assert songdb.list_songs(conn, tag="Pričest")["total"] == 0
+    other = copy.deepcopy(_song_v2())
+    other["title"] = "Druga"
+    other["sections"] = [{"label": None, "lines": [{"text": "posve drugi tekst bez ičega", "chords": []}]}]
+    oid = songdb.import_songs(conn, [other], "x.pdf")["added"][0]["id"]
+    assert songdb.list_songs(conn, tag="-")["total"] == 1                  # bez oznake
+    assert songdb.bulk_tag(conn, [sid, oid], "Kroz godinu") == 2
+    assert songdb.list_songs(conn, tag="kroz godinu")["total"] == 2         # bez obzira na velika slova
+    assert songdb.bulk_tag(conn, [sid, oid], "Kroz godinu", "remove") == 2
+    with pytest.raises(ValueError):
+        songdb.set_tag(conn, sid, "   ")
+    assert songdb.delete_song(conn, sid)
+    assert conn.execute("SELECT COUNT(*) FROM song_tags WHERE song_id=?", (sid,)).fetchone()[0] == 0
+
+
+def test_tags_migration_and_suggest_for_old_songs(tmp_path):
+    import sqlite3
+    path = tmp_path / "stara.db"
+    c = songdb.connect(path)
+    songdb.import_songs(c, [_song_v2()], "Pričest_žuto.pdf")
+    # simuliraj bazu iz prethodne verzije: bez oznaka i bez stupca "tagged"
+    c.execute("DELETE FROM song_tags")
+    c.execute("ALTER TABLE songs DROP COLUMN tagged")
+    c.close()
+    c = songdb.connect(path)
+    assert songdb.suggest_all(c) == (1, 2)                                 # Aleluja + Pričest (izvor)
+    sid = songdb.list_songs(c)["items"][0]["id"]
+    assert {t["name"] for t in songdb.get_song(c, sid)["tags"]} == {"Aleluja", "Pričest"}
+
+
+def test_web_tags(client):
+    _upload(client, chord_render.render_pdf([_song_v2()]), "klanjanje.pdf")
+    sid = client.get("/db/songs").get_json()["items"][0]["id"]
+    assert {t["name"] for t in client.get(f"/db/songs/{sid}").get_json()["tags"]} == {"Aleluja", "Klanjanje"}
+    r = client.post(f"/db/songs/{sid}/tags", json={"name": "Završna"})
+    assert {"name": "Završna", "auto": False} in r.get_json()["tags"]
+    r = client.delete(f"/db/songs/{sid}/tags/Aleluja")
+    assert "Aleluja" not in {t["name"] for t in r.get_json()["tags"]}
+    assert client.post(f"/db/songs/{sid}/tags", json={"name": ""}).status_code == 400
+    assert client.post("/db/songs/999/tags", json={"name": "X"}).status_code == 404
+    assert client.post("/db/tags/bulk", json={"ids": [sid], "name": "Pričest"}).get_json()["changed"] == 1
+    assert client.post("/db/tags/bulk", json={"ids": [sid], "name": "X", "action": "zbrisi"}).status_code == 400
+    assert client.post("/db/tags/suggest").get_json() == {"ok": True, "songs": 0, "tags": 0}
+    tags = {t["name"]: t["count"] for t in client.get("/api/v1/tags").get_json()["tags"]}
+    assert tags["Pričest"] == 1 and tags["Završna"] == 1 and tags["Aleluja"] == 0
+    assert client.get("/api/v1/songs?tag=Završna").get_json()["total"] == 1
+    assert "tags" in json.loads(client.get("/api/v1/export").data)["songs"][0]
+
+
+def test_web_tags_need_password(client, monkeypatch):
+    monkeypatch.setenv("DB_PASSWORD", "tajna")
+    _upload(client, chord_render.render_pdf([_song_v2()]), headers={"X-DB-Password": "tajna"})
+    sid = client.get("/db/songs").get_json()["items"][0]["id"]
+    assert client.post(f"/db/songs/{sid}/tags", json={"name": "X"}).status_code == 401
+    assert client.delete(f"/db/songs/{sid}/tags/X").status_code == 401
+    assert client.post("/db/tags/bulk", json={"ids": [sid], "name": "X"}).status_code == 401
+    assert client.post("/db/tags/suggest").status_code == 401
+    assert client.get("/db/tags").status_code == 200

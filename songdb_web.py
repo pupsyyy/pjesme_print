@@ -131,7 +131,62 @@ def db_stats():
 def db_songs():
     q = request.args.get("q", "")
     return jsonify(songdb.list_songs(_conn(), q, _int_arg("limit", 200, 1, 1000),
-                                     _int_arg("offset", 0, 0, 10**9)))
+                                     _int_arg("offset", 0, 0, 10**9),
+                                     tag=request.args.get("tag") or None))
+
+
+@bp.get("/db/tags")
+def db_tags():
+    return jsonify(songdb.list_tags(_conn()))
+
+
+@bp.post("/db/tags/suggest")
+def db_tags_suggest():
+    denied = _require_write()
+    if denied:
+        return denied
+    songs, tags = songdb.suggest_all(_conn())
+    return jsonify(ok=True, songs=songs, tags=tags)
+
+
+@bp.post("/db/tags/bulk")
+def db_tags_bulk():
+    denied = _require_write()
+    if denied:
+        return denied
+    d = request.get_json(silent=True) or {}
+    action = d.get("action", "add")
+    if action not in ("add", "remove"):
+        return jsonify(error="action mora biti add ili remove"), 400
+    try:
+        n = songdb.bulk_tag(_conn(), [int(i) for i in (d.get("ids") or [])[:2000]],
+                            str(d.get("name") or ""), action)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(ok=True, changed=n)
+
+
+@bp.post("/db/songs/<int:song_id>/tags")
+def db_song_tag_add(song_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    try:
+        ok = songdb.set_tag(_conn(), song_id, str((request.get_json(silent=True) or {}).get("name") or ""))
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    if not ok:
+        return jsonify(error="Pjesma ne postoji."), 404
+    return jsonify(tags=songdb.song_tags(_conn(), song_id))
+
+
+@bp.delete("/db/songs/<int:song_id>/tags/<path:name>")
+def db_song_tag_remove(song_id, name):
+    denied = _require_write()
+    if denied:
+        return denied
+    songdb.remove_tag(_conn(), song_id, name)
+    return jsonify(tags=songdb.song_tags(_conn(), song_id))
 
 
 @bp.get("/db/songs/<int:song_id>")
@@ -278,7 +333,8 @@ def _api_cors(resp):
 @bp.get("/api/v1")
 def api_index():
     return jsonify(name="Pjesmarica — baza pjesama", **songdb.stats(_conn()),
-                   endpoints=["/api/v1/songs?q=&limit=&offset=", "/api/v1/songs/<id>",
+                   endpoints=["/api/v1/songs?q=&tag=&limit=&offset=", "/api/v1/tags",
+                              "/api/v1/songs/<id>",
                               "/api/v1/songs/<id>.cho", "/api/v1/songs/<id>.pdf",
                               "/api/v1/export"])
 
@@ -286,6 +342,11 @@ def api_index():
 @bp.get("/api/v1/songs")
 def api_songs():
     return db_songs()
+
+
+@bp.get("/api/v1/tags")
+def api_tags():
+    return db_tags()
 
 
 @bp.get("/api/v1/songs/<int:song_id>")
@@ -394,6 +455,23 @@ DB_PAGE = r"""<!doctype html>
   .search input { width: 100%; background: var(--panel2); border: 1px solid var(--border);
                   border-radius: 10px; padding: .5rem .7rem; font-size: .9rem; }
   .search input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+  .tagbar { display: flex; gap: .35rem; padding: 0 .8rem .6rem; overflow-x: auto; flex: none;
+            scrollbar-width: thin; }
+  .tag { font-family: var(--ui); font-size: .74rem; font-weight: 500; white-space: nowrap;
+         border: 1px solid var(--border); background: var(--panel2); color: var(--text);
+         border-radius: 999px; padding: .15rem .55rem; cursor: pointer; line-height: 1.5;
+         display: inline-flex; align-items: center; gap: .3rem; }
+  .tag:hover { border-color: var(--accent); }
+  .tag.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tag.auto { border-style: dashed; color: var(--muted); }
+  .tag .x { opacity: .6; font-size: .8em; }
+  .tag .x:hover { opacity: 1; color: var(--err); }
+  .tag .n { opacity: .65; font-size: .9em; }
+  #list .tags { display: flex; flex-wrap: wrap; gap: .2rem; margin-top: .15rem; }
+  #list .tags .tag { font-size: .66rem; padding: 0 .4rem; cursor: default; }
+  .songtags { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin: -.3rem 0 1rem; }
+  .songtags select, .selbar select { background: var(--panel2); border: 1px solid var(--border);
+         border-radius: 999px; padding: .15rem .5rem; font-size: .76rem; font-family: var(--ui); }
   #pendingBar { margin: 0 .8rem .6rem; padding: .55rem .7rem; border-radius: 10px; cursor: pointer;
                 border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel));
                 font-family: var(--ui); font-size: .85rem; }
@@ -493,9 +571,12 @@ DB_PAGE = r"""<!doctype html>
     </div>
     <div id="pendingBar" class="hidden"></div>
     <div class="search"><input id="q" type="search" placeholder="Traži naslov, broj, tekst…" autocomplete="off"></div>
+    <div class="tagbar" id="tagbar"></div>
     <ul id="list"></ul>
     <div class="selbar">
+      <button class="btn" id="btnSelAll" style="padding:.25rem .55rem" title="Odaberi sve prikazane pjesme">☑ Sve</button>
       <span id="selInfo" class="muted">Odaberi pjesme kvačicom</span>
+      <select id="selTag" disabled title="Dodaj oznaku svim odabranim pjesmama"><option value="">+ oznaka…</option></select>
       <span class="grow"></span>
       <button class="btn" id="btnSelPdf" disabled title="Odabrane pjesme u izvornom izgledu (s akordima)">⬇ PDF</button>
       <button class="btn primary" id="btnSelEditor" disabled title="Otvori odabrane pjesme u uredniku pjesmarice (kompaktno / klasično, Word)">Napravi pjesmaricu</button>
@@ -524,7 +605,7 @@ DB_PAGE = r"""<!doctype html>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const state = { songs: [], total: 0, sel: new Set(), current: null, q: "" };
+const state = { songs: [], total: 0, sel: new Set(), current: null, q: "", tag: "", tags: [], untagged: 0 };
 const PW_KEY = "pjesme-dbpw", DRAFT_KEY = "pjesme-draft";
 
 function applyTheme(t) {
@@ -629,19 +710,65 @@ function fixHyphens(root) {
     });
   });
 }
-function showView(node) {
+function showView(node, quiet) {
   $("welcome").classList.add("hidden");
   const v = $("view"); v.innerHTML = ""; v.append(node); v.classList.remove("hidden");
   $("main").scrollTop = 0;
   fixHyphens(v);
-  if (window.matchMedia("(max-width: 820px)").matches) v.scrollIntoView({ behavior: "smooth" });
+  if (!quiet && window.matchMedia("(max-width: 820px)").matches) v.scrollIntoView({ behavior: "smooth" });
 }
 
 /* ── Popis ── */
 async function loadList() {
-  const data = await json(await fetch("db/songs?limit=1000&q=" + encodeURIComponent(state.q)));
+  const data = await json(await fetch("db/songs?limit=1000&q=" + encodeURIComponent(state.q) +
+                                      "&tag=" + encodeURIComponent(state.tag)));
   state.songs = data.items; state.total = data.total;
   renderList();
+}
+function tagChip(t, opts = {}) {
+  const c = el("span", "tag" + (t.auto ? " auto" : "") + (opts.on ? " on" : ""));
+  c.append(document.createTextNode(t.name));
+  if (t.auto) c.title = "Automatski prijedlog — klikni za potvrdu";
+  return c;
+}
+async function loadTags() {
+  const d = await json(await fetch("db/tags"));
+  state.tags = d.tags; state.untagged = d.untagged;
+  const bar = $("tagbar"); bar.innerHTML = "";
+  const all = el("span", "tag" + (state.tag === "" ? " on" : ""), "Sve");
+  all.onclick = () => setTagFilter("");
+  bar.append(all);
+  d.tags.filter(t => t.count || state.tag === t.name).forEach(t => {
+    const c = el("span", "tag" + (state.tag === t.name ? " on" : ""));
+    c.append(document.createTextNode(t.name + " "), el("span", "n", String(t.count)));
+    c.title = t.description || t.name;
+    c.onclick = () => setTagFilter(state.tag === t.name ? "" : t.name);
+    bar.append(c);
+  });
+  if (d.untagged) {
+    const u = el("span", "tag" + (state.tag === "-" ? " on" : ""));
+    u.append(document.createTextNode("bez oznake "), el("span", "n", String(d.untagged)));
+    u.onclick = () => setTagFilter(state.tag === "-" ? "" : "-");
+    bar.append(u);
+  }
+  const sug = el("span", "tag", "✨ Predloži oznake");
+  sug.title = "Automatski predloži oznake pjesmama koje ih još nisu dobile";
+  sug.onclick = async () => {
+    try { const r = await json(await api("db/tags/suggest", { method: "POST" }));
+          toast(r.songs ? ("Prijedlog za " + r.songs + " pjesama: " + r.tags + " oznaka (isprekidano = potvrdi)")
+                        : "Sve pjesme već imaju predložene oznake.");
+          await refreshAll(); }
+    catch (e) { toast(e.message, true); }
+  };
+  bar.append(sug);
+  const sel = $("selTag"); sel.innerHTML = '<option value="">+ oznaka…</option>';
+  d.tags.forEach(t => sel.append(new Option(t.name, t.name)));
+  sel.append(new Option("Nova oznaka…", "__new__"));
+}
+function setTagFilter(t) { state.tag = t; loadTags(); loadList().catch(e => toast(e.message, true)); }
+async function refreshAll() {
+  await Promise.all([loadList(), refreshStats(), loadTags()]);
+  if (state.current) openSong(state.current, true);
 }
 function renderList() {
   const ul = $("list"); ul.innerHTML = "";
@@ -653,6 +780,11 @@ function renderList() {
     box.append(el("div", "t", s.title));
     const meta = [s.subtitle, s.key && ("Key: " + s.key), (s.numbers || []).join(", ")].filter(Boolean).join(" · ");
     if (meta) box.append(el("div", "m", meta));
+    if ((s.tags || []).length) {
+      const tg = el("div", "tags");
+      s.tags.forEach(t => tg.append(tagChip(t)));
+      box.append(tg);
+    }
     li.append(cb, box);
     li.onclick = () => openSong(s.id);
     ul.append(li);
@@ -665,8 +797,25 @@ function renderList() {
 function renderSel() {
   const n = state.sel.size;
   $("selInfo").textContent = n ? ("Odabrano: " + n) : "Odaberi pjesme kvačicom";
-  $("btnSelPdf").disabled = $("btnSelEditor").disabled = !n;
+  $("btnSelPdf").disabled = $("btnSelEditor").disabled = $("selTag").disabled = !n;
 }
+$("btnSelAll").onclick = () => {
+  const all = state.songs.length && state.songs.every(s => state.sel.has(s.id));
+  state.songs.forEach(s => all ? state.sel.delete(s.id) : state.sel.add(s.id));
+  renderList();
+};
+$("selTag").onchange = async () => {
+  let name = $("selTag").value;
+  $("selTag").value = "";
+  if (!name) return;
+  if (name === "__new__") { name = (prompt("Naziv nove oznake:") || "").trim(); if (!name) return; }
+  try {
+    const r = await json(await api("db/tags/bulk", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                    body: JSON.stringify({ ids: [...state.sel], name, action: "add" }) }));
+    toast("Oznaka „" + name + "” dodana na " + r.changed + " pjesama.");
+    await refreshAll();
+  } catch (e) { toast(e.message, true); }
+};
 async function refreshStats() {
   const s = await json(await fetch("db/stats"));
   $("stats").textContent = s.songs + " pjesama";
@@ -681,7 +830,40 @@ $("q").addEventListener("input", () => {
 });
 
 /* ── Pjesma ── */
-async function openSong(id) {
+function renderSongTags(s) {
+  const box = el("div", "songtags");
+  (s.tags || []).forEach(t => {
+    const c = tagChip(t);
+    if (t.auto) c.onclick = () => tagOp(s.id, "POST", t.name);
+    const x = el("span", "x", "✕"); x.title = "Makni oznaku";
+    x.onclick = e => { e.stopPropagation(); tagOp(s.id, "DELETE", t.name); };
+    c.append(x);
+    box.append(c);
+  });
+  const sel = el("select");
+  sel.append(new Option("+ oznaka…", ""));
+  state.tags.filter(t => !(s.tags || []).some(x => x.name === t.name))
+    .forEach(t => sel.append(new Option(t.name, t.name)));
+  sel.append(new Option("Nova oznaka…", "__new__"));
+  sel.onchange = () => {
+    let name = sel.value;
+    if (name === "__new__") name = (prompt("Naziv nove oznake:") || "").trim();
+    if (name) tagOp(s.id, "POST", name);
+  };
+  box.append(sel);
+  if ((s.tags || []).some(t => t.auto)) box.append(el("span", "muted", "isprekidano = prijedlog, klik potvrđuje"));
+  return box;
+}
+async function tagOp(id, method, name) {
+  try {
+    const url = "db/songs/" + id + "/tags" + (method === "DELETE" ? "/" + encodeURIComponent(name) : "");
+    const opts = { method };
+    if (method === "POST") { opts.headers = { "Content-Type": "application/json" }; opts.body = JSON.stringify({ name }); }
+    await json(await api(url, opts));
+    await refreshAll();
+  } catch (e) { toast(e.message, true); }
+}
+async function openSong(id, keepScroll) {
   try {
     const s = await json(await fetch("db/songs/" + id));
     state.current = id; renderList();
@@ -695,6 +877,7 @@ async function openSong(id) {
     if ((s.numbers || []).length) head.append(el("span", "chip", "Pjesmarica " + s.numbers.join(", ")));
     head.append(el("span", "chip", "#" + s.id));
     box.append(head);
+    box.append(renderSongTags(s));
     const act = el("div", "actions");
     const a1 = el("a", "btn", "⬇ PDF (izvorni izgled)"); a1.href = "db/songs/" + id + "/pdf";
     const a2 = el("a", "btn", "⬇ ChordPro"); a2.href = "db/songs/" + id + "/chordpro";
@@ -705,7 +888,7 @@ async function openSong(id) {
       try { await json(await api("db/songs/" + id, { method: "DELETE" }));
             state.sel.delete(id); state.current = null; toast("Pjesma obrisana.");
             $("view").classList.add("hidden"); $("welcome").classList.remove("hidden");
-            await Promise.all([loadList(), refreshStats()]); }
+            await refreshAll(); }
       catch (e) { toast(e.message, true); }
     };
     act.append(a1, a2, a3, del);
@@ -713,7 +896,9 @@ async function openSong(id) {
     box.append(renderSheet(s));
     const src = (s.sources || []).map(x => x.file + (x.pages && x.pages.length ? " (str. " + x.pages.join(", ") + ")" : "")).join("; ");
     if (src) box.append(el("p", "muted", "Izvor: " + src));
-    showView(box);
+    const top = $("main").scrollTop;
+    showView(box, keepScroll);
+    if (keepScroll) $("main").scrollTop = top;
   } catch (e) { toast(e.message, true); }
 }
 
@@ -739,7 +924,7 @@ async function importFiles(files) {
       } catch (e) { reports.push({ file: files[i].name, error: e.message }); }
     }
   } finally { busy(null); }
-  await Promise.all([loadList(), refreshStats()]);
+  await Promise.all([loadList(), refreshStats(), loadTags()]);
   showReport(reports);
 }
 function showReport(reports) {
@@ -790,7 +975,7 @@ async function showPending() {
           if (!confirm(label + " — za svih " + data.items.length + " pjesama?")) return;
           try { const r = await json(await api("db/pending/all", { method: "POST", headers: { "Content-Type": "application/json" },
                                                                 body: JSON.stringify({ action: a }) }));
-                toast("Riješeno: " + r.resolved); await Promise.all([loadList(), refreshStats()]); showPending(); }
+                toast("Riješeno: " + r.resolved); await refreshAll(); showPending(); }
           catch (e) { toast(e.message, true); }
         };
         bulk.append(b);
@@ -819,7 +1004,7 @@ async function showPending() {
           b.onclick = async () => {
             try { await json(await api("db/pending/" + p.id, { method: "POST", headers: { "Content-Type": "application/json" },
                                                          body: JSON.stringify({ action: a }) }));
-                  toast("Spremljeno."); await Promise.all([loadList(), refreshStats()]); showPending(); }
+                  toast("Spremljeno."); await refreshAll(); showPending(); }
             catch (e) { toast(e.message, true); }
           };
           act.append(b);
@@ -856,7 +1041,7 @@ $("btnSelEditor").onclick = async () => {
   } catch (e) { toast(e.message, true); }
 };
 
-Promise.all([loadList(), refreshStats()]).catch(e => toast(e.message, true));
+Promise.all([loadTags(), loadList(), refreshStats()]).catch(e => toast(e.message, true));
 </script>
 </body>
 </html>"""

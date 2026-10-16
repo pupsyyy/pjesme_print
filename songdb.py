@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import chord_extract
+import songtags
 
 SIMILARITY_THRESHOLD = 0.80   # tekst ≥ 80 % sličan (drukčiji naslov) -> pitaj
 SAME_RATIO = 0.95             # tekst ≥ 95 % isti -> već imamo
@@ -58,6 +59,21 @@ CREATE TABLE IF NOT EXISTS pending (
     source      TEXT NOT NULL DEFAULT '{}',
     created_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS tags (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    description TEXT NOT NULL DEFAULT '',
+    sort        INTEGER NOT NULL DEFAULT 100
+);
+
+CREATE TABLE IF NOT EXISTS song_tags (
+    song_id     INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
+    tag_id      INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    source      TEXT NOT NULL DEFAULT 'user',
+    PRIMARY KEY (song_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS song_tags_tag ON song_tags(tag_id);
 
 CREATE TABLE IF NOT EXISTS imports (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,6 +120,14 @@ def _migrate(conn):
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(pending)")}
     if "reason" not in cols:
         conn.execute("ALTER TABLE pending ADD COLUMN reason TEXT NOT NULL DEFAULT 'similar'")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(songs)")}
+    if "tagged" not in cols:
+        # 1 = oznake su već predložene/uređene (ponovni prijedlog ih ne dira)
+        conn.execute("ALTER TABLE songs ADD COLUMN tagged INTEGER NOT NULL DEFAULT 0")
+    if conn.execute("SELECT COUNT(*) FROM tags").fetchone()[0] == 0:
+        for i, (name, desc) in enumerate(songtags.DEFAULT_TAGS):
+            conn.execute("INSERT OR IGNORE INTO tags (name, description, sort) VALUES (?,?,?)",
+                         (name, desc, i))
 
 
 # ── Normalizacija i usporedba ─────────────────────────────────────────────────
@@ -188,6 +212,12 @@ def _derived(song):
 
 
 def _insert(conn, song, source):
+    sid = _insert_row(conn, song, source)
+    auto_tag(conn, sid, song, [source.get("file", "")] if source else [])
+    return sid
+
+
+def _insert_row(conn, song, source):
     d = _derived(song)
     now = _now()
     cur = conn.execute(
@@ -348,11 +378,12 @@ def import_songs(conn, songs, filename="", sha256="", pages=0):
     return report
 
 
-def _row_to_song(row, full=True):
+def _row_to_song(row, full=True, tags=None):
     data = json.loads(row["data"])
     out = {
         "id": row["id"], "title": row["title"], "subtitle": row["subtitle"],
         "key": row["song_key"], "numbers": json.loads(row["numbers"]),
+        "tags": tags if tags is not None else [],
         "created_at": row["created_at"], "updated_at": row["updated_at"],
     }
     if full:
@@ -367,7 +398,7 @@ def _row_to_song(row, full=True):
 
 def get_song(conn, song_id):
     row = conn.execute("SELECT * FROM songs WHERE id=?", (song_id,)).fetchone()
-    return _row_to_song(row) if row else None
+    return _row_to_song(row, tags=song_tags(conn, song_id)) if row else None
 
 
 def song_data(conn, song_id):
@@ -376,22 +407,144 @@ def song_data(conn, song_id):
     return json.loads(row["data"]) if row else None
 
 
-def list_songs(conn, q="", limit=50, offset=0):
-    """Popis (sažetak) s pretragom po naslovu, podnaslovu, broju i tekstu."""
+def list_songs(conn, q="", limit=50, offset=0, tag=None):
+    """Popis (sažetak) s pretragom po naslovu, podnaslovu, broju i tekstu.
+
+    tag: samo pjesme s tom oznakom; "-" = pjesme bez ijedne oznake."""
     where, args = [], []
     for w in norm(q).split():
         where.append("search LIKE ?")
         args.append(f"%{w}%")
+    if tag == "-":
+        where.append("id NOT IN (SELECT song_id FROM song_tags)")
+    elif tag:
+        where.append("id IN (SELECT st.song_id FROM song_tags st JOIN tags t ON t.id = st.tag_id"
+                     " WHERE t.name = ? COLLATE NOCASE)")
+        args.append(tag)
     sql_where = (" WHERE " + " AND ".join(where)) if where else ""
     total = conn.execute(f"SELECT COUNT(*) FROM songs{sql_where}", args).fetchone()[0]
     rows = conn.execute(
         f"SELECT * FROM songs{sql_where} ORDER BY title COLLATE NOCASE, id"
         " LIMIT ? OFFSET ?", args + [int(limit), int(offset)]).fetchall()
-    return {"total": total, "items": [_row_to_song(r, full=False) for r in rows]}
+    tags = _tags_for(conn, [r["id"] for r in rows])
+    return {"total": total,
+            "items": [_row_to_song(r, full=False, tags=tags.get(r["id"], [])) for r in rows]}
 
 
 def export_all(conn):
-    return [_row_to_song(r) for r in conn.execute("SELECT * FROM songs ORDER BY id")]
+    rows = conn.execute("SELECT * FROM songs ORDER BY id").fetchall()
+    tags = _tags_for(conn, [r["id"] for r in rows])
+    return [_row_to_song(r, tags=tags.get(r["id"], [])) for r in rows]
+
+
+# ── Oznake ────────────────────────────────────────────────────────────────────
+
+def _tags_for(conn, song_ids):
+    """{song_id: [{"name", "auto"}]} za više pjesama odjednom."""
+    out = {}
+    if not song_ids:
+        return out
+    marks = ",".join("?" * len(song_ids))
+    for r in conn.execute(
+            f"SELECT st.song_id, t.name, st.source FROM song_tags st JOIN tags t ON t.id = st.tag_id"
+            f" WHERE st.song_id IN ({marks}) ORDER BY t.sort, t.name", song_ids):
+        out.setdefault(r["song_id"], []).append({"name": r["name"], "auto": r["source"] == "auto"})
+    return out
+
+
+def song_tags(conn, song_id):
+    return _tags_for(conn, [song_id]).get(song_id, [])
+
+
+def list_tags(conn):
+    rows = conn.execute(
+        "SELECT t.name, t.description, COUNT(st.song_id) AS n,"
+        " SUM(CASE WHEN st.source = 'auto' THEN 1 ELSE 0 END) AS n_auto"
+        " FROM tags t LEFT JOIN song_tags st ON st.tag_id = t.id"
+        " GROUP BY t.id ORDER BY t.sort, t.name").fetchall()
+    untagged = conn.execute(
+        "SELECT COUNT(*) FROM songs WHERE id NOT IN (SELECT song_id FROM song_tags)").fetchone()[0]
+    return {"tags": [{"name": r["name"], "description": r["description"], "count": r["n"],
+                      "auto": r["n_auto"] or 0} for r in rows],
+            "untagged": untagged}
+
+
+def _tag_id(conn, name):
+    name = " ".join((name or "").split())[:40]
+    if not name:
+        raise ValueError("Oznaka ne smije biti prazna.")
+    row = conn.execute("SELECT id FROM tags WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
+    if row:
+        return row["id"]
+    return conn.execute("INSERT INTO tags (name) VALUES (?)", (name,)).lastrowid
+
+
+def set_tag(conn, song_id, name, source="user"):
+    """Dodaj oznaku pjesmi (ili potvrdi automatski prijedlog). False = nema pjesme."""
+    if conn.execute("SELECT 1 FROM songs WHERE id=?", (song_id,)).fetchone() is None:
+        return False
+    tid = _tag_id(conn, name)
+    if source == "auto":
+        conn.execute("INSERT OR IGNORE INTO song_tags (song_id, tag_id, source) VALUES (?,?,'auto')",
+                     (song_id, tid))
+    else:
+        conn.execute("INSERT INTO song_tags (song_id, tag_id, source) VALUES (?,?,'user')"
+                     " ON CONFLICT(song_id, tag_id) DO UPDATE SET source='user'", (song_id, tid))
+        conn.execute("UPDATE songs SET tagged=1 WHERE id=?", (song_id,))
+    return True
+
+
+def remove_tag(conn, song_id, name):
+    conn.execute("UPDATE songs SET tagged=1 WHERE id=?", (song_id,))
+    return conn.execute(
+        "DELETE FROM song_tags WHERE song_id=? AND tag_id IN"
+        " (SELECT id FROM tags WHERE name = ? COLLATE NOCASE)", (song_id, name)).rowcount > 0
+
+
+def auto_tag(conn, song_id, song=None, source_names=()):
+    """Automatski prijedlog oznaka (spremaju se kao 'auto'). Vrati dodane."""
+    if song is None:
+        song = song_data(conn, song_id)
+    if not source_names:
+        row = conn.execute("SELECT sources FROM songs WHERE id=?", (song_id,)).fetchone()
+        source_names = [x.get("file", "") for x in json.loads(row["sources"])] if row else []
+    tags = songtags.suggest(song, source_names)
+    for t in tags:
+        set_tag(conn, song_id, t, source="auto")
+    conn.execute("UPDATE songs SET tagged=1 WHERE id=?", (song_id,))
+    return tags
+
+
+def suggest_all(conn):
+    """Prijedlog oznaka za pjesme koje ih još nisu dobile. Vrati (pjesama, oznaka)."""
+    ids = [r["id"] for r in conn.execute("SELECT id FROM songs WHERE tagged=0")]
+    added = 0
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for sid in ids:
+            added += len(auto_tag(conn, sid))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return len(ids), added
+
+
+def bulk_tag(conn, song_ids, name, action="add"):
+    """Ista oznaka za više pjesama (add/remove). Vrati broj promijenjenih."""
+    n = 0
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for sid in song_ids:
+            if action == "remove":
+                n += remove_tag(conn, int(sid), name)
+            else:
+                n += set_tag(conn, int(sid), name)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return n
 
 
 def delete_song(conn, song_id):
