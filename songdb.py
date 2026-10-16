@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import chord_extract
+import songnotes
 import songtags
 
 SIMILARITY_THRESHOLD = 0.80   # tekst ≥ 80 % sličan (drukčiji naslov) -> pitaj
@@ -95,6 +96,11 @@ def _now():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+class _Conn(sqlite3.Connection):
+    """Veza koja zna gdje je baza (note se spremaju u mapu pored nje)."""
+    db_file = None
+
+
 def db_path():
     return Path(os.environ.get("DB_PATH") or DEFAULT_DB)
 
@@ -104,14 +110,16 @@ def connect(path=None):
     path = Path(path or db_path())
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=10, isolation_level=None)
+    conn = sqlite3.connect(str(path), timeout=10, isolation_level=None, factory=_Conn)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 10000")
     if str(path) != ":memory:":
         conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
+    conn.executescript(songnotes.SCHEMA)
     _migrate(conn)
+    conn.db_file = None if str(path) == ":memory:" else path
     return conn
 
 
@@ -378,7 +386,7 @@ def import_songs(conn, songs, filename="", sha256="", pages=0):
     return report
 
 
-def _row_to_song(row, full=True, tags=None):
+def _row_to_song(row, full=True, tags=None, notes=None):
     data = json.loads(row["data"])
     out = {
         "id": row["id"], "title": row["title"], "subtitle": row["subtitle"],
@@ -386,6 +394,8 @@ def _row_to_song(row, full=True, tags=None):
         "tags": tags if tags is not None else [],
         "created_at": row["created_at"], "updated_at": row["updated_at"],
     }
+    if notes is not None:
+        out["notes"] = notes
     if full:
         out.update({
             "meta": data.get("meta") or [], "sections": data.get("sections") or [],
@@ -398,7 +408,9 @@ def _row_to_song(row, full=True, tags=None):
 
 def get_song(conn, song_id):
     row = conn.execute("SELECT * FROM songs WHERE id=?", (song_id,)).fetchone()
-    return _row_to_song(row, tags=song_tags(conn, song_id)) if row else None
+    if row is None:
+        return None
+    return _row_to_song(row, tags=song_tags(conn, song_id), notes=list_notes(conn, song_id))
 
 
 def song_data(conn, song_id):
@@ -426,15 +438,22 @@ def list_songs(conn, q="", limit=50, offset=0, tag=None):
     rows = conn.execute(
         f"SELECT * FROM songs{sql_where} ORDER BY title COLLATE NOCASE, id"
         " LIMIT ? OFFSET ?", args + [int(limit), int(offset)]).fetchall()
-    tags = _tags_for(conn, [r["id"] for r in rows])
-    return {"total": total,
-            "items": [_row_to_song(r, full=False, tags=tags.get(r["id"], [])) for r in rows]}
+    ids = [r["id"] for r in rows]
+    tags = _tags_for(conn, ids)
+    counts = _note_counts(conn, ids)
+    items = []
+    for r in rows:
+        item = _row_to_song(r, full=False, tags=tags.get(r["id"], []))
+        item["notes_count"] = counts.get(r["id"], 0)
+        items.append(item)
+    return {"total": total, "items": items}
 
 
 def export_all(conn):
     rows = conn.execute("SELECT * FROM songs ORDER BY id").fetchall()
     tags = _tags_for(conn, [r["id"] for r in rows])
-    return [_row_to_song(r, tags=tags.get(r["id"], [])) for r in rows]
+    return [_row_to_song(r, tags=tags.get(r["id"], []), notes=list_notes(conn, r["id"]))
+            for r in rows]
 
 
 # ── Oznake ────────────────────────────────────────────────────────────────────
@@ -548,7 +567,84 @@ def bulk_tag(conn, song_ids, name, action="add"):
 
 
 def delete_song(conn, song_id):
-    return conn.execute("DELETE FROM songs WHERE id=?", (song_id,)).rowcount > 0
+    stored = [r["stored"] for r in conn.execute(
+        "SELECT stored FROM attachments WHERE song_id=?", (song_id,))]
+    ok = conn.execute("DELETE FROM songs WHERE id=?", (song_id,)).rowcount > 0
+    if ok and conn.db_file:
+        for name in stored:                       # datoteke nota idu s pjesmom
+            songnotes.remove_file(songnotes.notes_dir(conn.db_file), name)
+    return ok
+
+
+# ── Note (notni zapis) ────────────────────────────────────────────────────────
+
+def _note_row(r):
+    return {"id": r["id"], "name": r["name"], "filename": r["filename"], "mime": r["mime"],
+            "kind": r["kind"], "size": r["size"], "created_at": r["created_at"],
+            "inline": r["kind"] in songnotes.INLINE_KINDS}
+
+
+def _note_counts(conn, song_ids):
+    if not song_ids:
+        return {}
+    marks = ",".join("?" * len(song_ids))
+    return {r[0]: r[1] for r in conn.execute(
+        f"SELECT song_id, COUNT(*) FROM attachments WHERE song_id IN ({marks}) GROUP BY song_id",
+        song_ids)}
+
+
+def list_notes(conn, song_id):
+    return [_note_row(r) for r in conn.execute(
+        "SELECT * FROM attachments WHERE song_id=? ORDER BY id", (song_id,))]
+
+
+def add_note(conn, song_id, filename, data, name=None):
+    """Spremi datoteku nota uz pjesmu. Vrati opis ili None ako pjesme nema.
+
+    Digne songnotes.NoteError za nedopuštenu/neispravnu datoteku."""
+    if conn.execute("SELECT 1 FROM songs WHERE id=?", (song_id,)).fetchone() is None:
+        return None
+    if not conn.db_file:
+        raise songnotes.NoteError("Note se ne mogu spremiti u privremenu bazu.")
+    mime, kind, ext = songnotes.check_file(filename, data)
+    shown_file = songnotes.clean_name(filename, "note" + ext)
+    shown_name = songnotes.clean_name(name, os.path.splitext(shown_file)[0])
+    stored = songnotes.new_stored_name(ext)
+    songnotes.write_file(songnotes.notes_dir(conn.db_file), stored, data)
+    try:
+        nid = conn.execute(
+            "INSERT INTO attachments (song_id, name, filename, stored, mime, kind, size, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (song_id, shown_name, shown_file, stored, mime, kind, len(data), _now())).lastrowid
+    except Exception:
+        songnotes.remove_file(songnotes.notes_dir(conn.db_file), stored)
+        raise
+    return _note_row(conn.execute("SELECT * FROM attachments WHERE id=?", (nid,)).fetchone())
+
+
+def get_note(conn, note_id):
+    """(opis, putanja do datoteke) ili None."""
+    r = conn.execute("SELECT * FROM attachments WHERE id=?", (note_id,)).fetchone()
+    if r is None or not conn.db_file:
+        return None
+    return _note_row(r) | {"song_id": r["song_id"]}, songnotes.notes_dir(conn.db_file) / r["stored"]
+
+
+def rename_note(conn, note_id, name):
+    name = songnotes.clean_name(name, "")
+    if not name:
+        raise songnotes.NoteError("Naziv ne smije biti prazan.")
+    return conn.execute("UPDATE attachments SET name=? WHERE id=?", (name, note_id)).rowcount > 0
+
+
+def delete_note(conn, note_id):
+    r = conn.execute("SELECT stored FROM attachments WHERE id=?", (note_id,)).fetchone()
+    if r is None:
+        return False
+    conn.execute("DELETE FROM attachments WHERE id=?", (note_id,))
+    if conn.db_file:
+        songnotes.remove_file(songnotes.notes_dir(conn.db_file), r["stored"])
+    return True
 
 
 def list_pending(conn):

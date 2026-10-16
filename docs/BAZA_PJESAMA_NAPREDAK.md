@@ -155,3 +155,11 @@ Web: GET/POST /db/songs/<id>/notes, GET /db/notes/<aid>, PATCH (ime), DELETE; AP
 song JSON "notes". Pisanje uz DB_PASSWORD. UI: sekcija 🎼 Note na pjesmi, 🎼 u popisu.
 MusicXML prikaz (OpenSheetMusicDisplay) NE sada — CDN nedostupan u sandboxu, ne može se testirati.
 PR #17 još otvoren → ista grana.
+
+## Status faze 4 (note)
+- [x] songnotes.py (TYPES s provjerom sadržaja, clean_name, atomski zapis), tablica attachments
+- [x] songdb: add/list/get/rename/delete_note, delete_song briše datoteke, notes_count u popisu, notes u pjesmi/exportu
+- [x] web: /db/songs/<id>/notes GET/POST (više datoteka), /db/notes/<id> GET(?download=1)/PATCH/DELETE,
+      /api/v1/notes/<id>; inline samo PDF/slike, nosniff; pisanje uz DB_PASSWORD
+- [x] UI: sekcija 🎼 Note (sličice, Otvori, ⬇, ✎, ✕), 🎼 u popisu; Playwright OK; 76 testova
+- [x] README/DEPLOY (backup data/note)

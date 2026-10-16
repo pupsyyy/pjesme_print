@@ -83,6 +83,14 @@ Završna i Kroz godinu su liturgijski izbor pa se uglavnom dodaju ručno ili
 skupno (filtriraj, „☑ Sve", „+ oznaka"). Gumb „✨ Predloži oznake" radi
 prijedlog za pjesme koje ga još nisu dobile (npr. one uvezene prije oznaka).
 
+**Note (notni zapis)** uz pjesmu — „🎼 Note → ＋ Dodaj note": PDF, slika
+(PNG/JPG/WebP), MusicXML (.musicxml/.xml/.mxl), MuseScore (.mscz/.mscx) ili
+MIDI, više datoteka po pjesmi (npr. Sopran, Gitara, Klavir). Spremaju se
+**odvojeno** od teksta i akorda: datoteke u `data/note/` (pod nasumičnim
+imenom), u bazi samo popis. Vrsta se provjerava po sadržaju datoteke; slike
+i PDF se otvaraju u pregledniku, ostalo se preuzima. Brisanjem pjesme brišu
+se i njezine note.
+
 Iz baze: pretraga (naslov, broj, tekst, bez obzira na dijakritike), filter po oznaci,
 pregled s akordima, preuzimanje PDF-a (izvorni izgled), ChordPro i JSON,
 te **„Napravi pjesmaricu"** — odabrane pjesme otvore se u uredniku
@@ -95,7 +103,8 @@ te **„Napravi pjesmaricu"** — odabrane pjesme otvore se u uredniku
 | `GET /api/v1` | broj pjesama, popis endpointa |
 | `GET /api/v1/songs?q=&tag=&limit=&offset=` | popis (id, naslov, podnaslov, key, brojevi, oznake); `tag=-` = bez oznake |
 | `GET /api/v1/tags` | oznake s brojem pjesama |
-| `GET /api/v1/songs/<id>` | cijela pjesma: `meta`, `sections` (tekst + akordi), `lyrics`, `chordpro`, `sources` |
+| `GET /api/v1/songs/<id>` | cijela pjesma: `meta`, `sections` (tekst + akordi), `lyrics`, `chordpro`, `sources`, `tags`, `notes` |
+| `GET /api/v1/notes/<id>` | datoteka nota (id iz `notes` pjesme) |
 | `GET /api/v1/songs/<id>.cho` | ChordPro tekst |
 | `GET /api/v1/songs/<id>.pdf` | PDF u izvornom izgledu |
 | `GET /api/v1/export` | sve pjesme (JSON) — ujedno i backup |

@@ -87,11 +87,12 @@ docker compose up -d --build
 - Bez ovih varijabli sve radi bez lozinke (u redu ako je cijela stranica
   iza Caddy `basic_auth`).
 
-**Backup** (dok aplikacija radi, sigurno):
+**Backup** (dok aplikacija radi, sigurno) — baza + mapa s notama:
 
 ```bash
 docker compose exec pjesme python -c "import sqlite3; s=sqlite3.connect('/app/data/pjesme.db'); d=sqlite3.connect('/app/data/backup.db'); s.backup(d); d.close()"
 cp data/backup.db ~/pjesme-$(date +%F).db
+tar czf ~/pjesme-note-$(date +%F).tgz -C data note     # note (PDF/slike/MusicXML)
 ```
 
 ili `curl .../api/v1/export > pjesme.json` (sve pjesme kao JSON).

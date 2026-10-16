@@ -23,6 +23,7 @@ from flask import (Blueprint, Response, g, jsonify, make_response, request,
 import chord_extract
 import chord_render
 import songdb
+import songnotes
 
 bp = Blueprint("songdb", __name__)
 
@@ -204,6 +205,76 @@ def db_delete(song_id):
     return jsonify(ok=ok) if ok else (jsonify(error="Pjesma ne postoji."), 404)
 
 
+# ── Note (notni zapis) uz pjesmu ──────────────────────────────────────────────
+
+@bp.get("/db/songs/<int:song_id>/notes")
+def db_notes(song_id):
+    return jsonify(notes=songdb.list_notes(_conn(), song_id))
+
+
+@bp.post("/db/songs/<int:song_id>/notes")
+def db_note_add(song_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    files = request.files.getlist("file")
+    if not files:
+        return jsonify(error="Nije poslana nijedna datoteka."), 400
+    conn = _conn()
+    added, errors = [], []
+    for f in files:
+        try:
+            n = songdb.add_note(conn, song_id, f.filename or "", f.read(),
+                                request.form.get("name") if len(files) == 1 else None)
+        except songnotes.NoteError as exc:
+            errors.append(str(exc))
+            continue
+        if n is None:
+            return jsonify(error="Pjesma ne postoji."), 404
+        added.append(n)
+    if not added:
+        return jsonify(error=" ".join(errors)), 400
+    return jsonify(added=added, errors=errors, notes=songdb.list_notes(conn, song_id))
+
+
+def _note_file(note_id):
+    found = songdb.get_note(_conn(), note_id)
+    if found is None or not found[1].exists():
+        return jsonify(error="Note ne postoje."), 404
+    note, path = found
+    inline = note["inline"] and request.args.get("download") != "1"
+    resp = send_file(path, mimetype=note["mime"], as_attachment=not inline,
+                     download_name=note["filename"], max_age=0)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+@bp.get("/db/notes/<int:note_id>")
+def db_note_file(note_id):
+    return _note_file(note_id)
+
+
+@bp.patch("/db/notes/<int:note_id>")
+def db_note_rename(note_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    try:
+        ok = songdb.rename_note(_conn(), note_id, (request.get_json(silent=True) or {}).get("name"))
+    except songnotes.NoteError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(ok=True) if ok else (jsonify(error="Note ne postoje."), 404)
+
+
+@bp.delete("/db/notes/<int:note_id>")
+def db_note_delete(note_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    ok = songdb.delete_note(_conn(), note_id)
+    return jsonify(ok=True) if ok else (jsonify(error="Note ne postoje."), 404)
+
+
 @bp.get("/db/pending")
 def db_pending():
     return jsonify(items=songdb.list_pending(_conn()))
@@ -334,7 +405,7 @@ def _api_cors(resp):
 def api_index():
     return jsonify(name="Pjesmarica — baza pjesama", **songdb.stats(_conn()),
                    endpoints=["/api/v1/songs?q=&tag=&limit=&offset=", "/api/v1/tags",
-                              "/api/v1/songs/<id>",
+                              "/api/v1/songs/<id>", "/api/v1/notes/<id>",
                               "/api/v1/songs/<id>.cho", "/api/v1/songs/<id>.pdf",
                               "/api/v1/export"])
 
@@ -352,6 +423,11 @@ def api_tags():
 @bp.get("/api/v1/songs/<int:song_id>")
 def api_song(song_id):
     return db_song(song_id)
+
+
+@bp.get("/api/v1/notes/<int:note_id>")
+def api_note_file(note_id):
+    return _note_file(note_id)
 
 
 @bp.get("/api/v1/songs/<int:song_id>.cho")
@@ -378,7 +454,8 @@ def api_export():
 def page():
     from app import APP_VERSION, MAX_UPLOAD_MB
     html = (DB_PAGE.replace("__VERSION__", APP_VERSION)
-            .replace("__MAX_MB__", str(MAX_UPLOAD_MB)))
+            .replace("__MAX_MB__", str(MAX_UPLOAD_MB))
+            .replace("__NOTE_ACCEPT__", songnotes.ACCEPT))
     resp = make_response(html)
     resp.headers["Cache-Control"] = "no-cache"
     return resp
@@ -472,6 +549,21 @@ DB_PAGE = r"""<!doctype html>
   .songtags { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin: -.3rem 0 1rem; }
   .songtags select, .selbar select { background: var(--panel2); border: 1px solid var(--border);
          border-radius: 999px; padding: .15rem .5rem; font-size: .76rem; font-family: var(--ui); }
+  .notes { border: 1px solid var(--border); border-radius: 12px; padding: .6rem .8rem;
+           margin: -.2rem 0 1.1rem; background: var(--panel2); }
+  .notes .head { display: flex; align-items: center; gap: .6rem; font-family: var(--ui);
+                 font-weight: 600; font-size: .9rem; }
+  .notes .empty-n { color: var(--muted); font-size: .85rem; margin: .3rem 0 0; }
+  .notelist { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .5rem; }
+  .note { border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
+          padding: .5rem .6rem; width: 13.5rem; display: flex; flex-direction: column; gap: .35rem; }
+  .note .thumb { height: 7.5rem; border-radius: 6px; background: #fff; display: grid; place-items: center;
+                 overflow: hidden; font-size: 2.2rem; cursor: pointer; border: 1px solid var(--border); }
+  .note .thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .note .nm { font-family: var(--ui); font-weight: 600; font-size: .82rem; word-break: break-word; }
+  .note .sub { color: var(--muted); font-size: .72rem; word-break: break-word; }
+  .note .acts { display: flex; gap: .3rem; flex-wrap: wrap; }
+  .note .acts .btn { padding: .2rem .5rem; font-size: .75rem; }
   #pendingBar { margin: 0 .8rem .6rem; padding: .55rem .7rem; border-radius: 10px; cursor: pointer;
                 border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel));
                 font-family: var(--ui); font-size: .85rem; }
@@ -599,6 +691,7 @@ DB_PAGE = r"""<!doctype html>
   </section>
 </div>
 
+<input type="file" id="noteInput" accept="__NOTE_ACCEPT__" multiple hidden>
 <div id="busy" class="hidden"><div class="box"><div class="spin"></div><span id="busyText">Radim…</span></div></div>
 <div id="toast"></div>
 
@@ -777,7 +870,7 @@ function renderList() {
     const cb = el("input"); cb.type = "checkbox"; cb.checked = state.sel.has(s.id);
     cb.onclick = e => { e.stopPropagation(); cb.checked ? state.sel.add(s.id) : state.sel.delete(s.id); renderSel(); };
     const box = el("div");
-    box.append(el("div", "t", s.title));
+    box.append(el("div", "t", s.title + (s.notes_count ? "  🎼" : "")));
     const meta = [s.subtitle, s.key && ("Key: " + s.key), (s.numbers || []).join(", ")].filter(Boolean).join(" · ");
     if (meta) box.append(el("div", "m", meta));
     if ((s.tags || []).length) {
@@ -863,6 +956,76 @@ async function tagOp(id, method, name) {
     await refreshAll();
   } catch (e) { toast(e.message, true); }
 }
+function fmtSize(n) {
+  return n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " kB";
+}
+const NOTE_ICON = { pdf: "📄", image: "🖼", musicxml: "🎼", musescore: "🎼", midi: "🎹" };
+const NOTE_KIND = { pdf: "PDF", image: "slika", musicxml: "MusicXML", musescore: "MuseScore", midi: "MIDI" };
+function renderNotes(s) {
+  const box = el("div", "notes");
+  const head = el("div", "head");
+  head.append(el("span", null, "🎼 Note"), el("span", "grow"));
+  const add = el("button", "btn", "＋ Dodaj note");
+  add.title = "PDF, slika, MusicXML (.musicxml/.mxl), MuseScore (.mscz) ili MIDI — sprema se odvojeno od teksta";
+  add.onclick = () => { $("noteInput").dataset.song = s.id; $("noteInput").click(); };
+  head.append(add);
+  box.append(head);
+  const notes = s.notes || [];
+  if (!notes.length) {
+    box.append(el("p", "empty-n", "Nema nota. Dodaj PDF ili sliku nota, MusicXML ili MuseScore datoteku."));
+    return box;
+  }
+  const list = el("div", "notelist");
+  notes.forEach(n => {
+    const card = el("div", "note");
+    const url = "db/notes/" + n.id;
+    const thumb = el("div", "thumb");
+    if (n.kind === "image") {
+      const img = el("img"); img.src = url; img.alt = n.name; img.loading = "lazy";
+      thumb.append(img);
+    } else thumb.textContent = NOTE_ICON[n.kind] || "📎";
+    thumb.title = n.inline ? "Otvori" : "Preuzmi";
+    thumb.onclick = () => window.open(n.inline ? url : url + "?download=1", "_blank");
+    card.append(thumb, el("div", "nm", n.name),
+                el("div", "sub", (NOTE_KIND[n.kind] || n.kind) + " · " + fmtSize(n.size) + " · " + n.filename));
+    const acts = el("div", "acts");
+    if (n.inline) { const o = el("a", "btn", "Otvori"); o.href = url; o.target = "_blank"; acts.append(o); }
+    const d = el("a", "btn", "⬇"); d.href = url + "?download=1"; d.title = "Preuzmi";
+    const r = el("button", "btn", "✎"); r.title = "Preimenuj (npr. Sopran, Gitara, Klavir)";
+    r.onclick = async () => {
+      const name = (prompt("Naziv nota (npr. Sopran, Gitara, Klavir):", n.name) || "").trim();
+      if (!name || name === n.name) return;
+      try { await json(await api(url, { method: "PATCH", headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ name }) }));
+            openSong(s.id, true); }
+      catch (e) { toast(e.message, true); }
+    };
+    const x = el("button", "btn danger", "✕"); x.title = "Obriši note";
+    x.onclick = async () => {
+      if (!confirm("Obrisati note „" + n.name + "”?")) return;
+      try { await json(await api(url, { method: "DELETE" })); await refreshAll(); }
+      catch (e) { toast(e.message, true); }
+    };
+    acts.append(d, r, x);
+    card.append(acts);
+    list.append(card);
+  });
+  box.append(list);
+  return box;
+}
+$("noteInput").onchange = async () => {
+  const input = $("noteInput"), id = input.dataset.song, files = [...input.files];
+  input.value = "";
+  if (!files.length || !id) return;
+  busy("Spremam note…");
+  try {
+    const fd = new FormData();
+    files.forEach(f => fd.append("file", f));
+    const r = await json(await api("db/songs/" + id + "/notes", { method: "POST", body: fd }));
+    toast("Dodano: " + r.added.length + (r.errors.length ? " · " + r.errors.join(" ") : ""), r.errors.length > 0);
+    await refreshAll();
+  } catch (e) { toast(e.message, true); } finally { busy(null); }
+};
 async function openSong(id, keepScroll) {
   try {
     const s = await json(await fetch("db/songs/" + id));
@@ -878,6 +1041,7 @@ async function openSong(id, keepScroll) {
     head.append(el("span", "chip", "#" + s.id));
     box.append(head);
     box.append(renderSongTags(s));
+    box.append(renderNotes(s));
     const act = el("div", "actions");
     const a1 = el("a", "btn", "⬇ PDF (izvorni izgled)"); a1.href = "db/songs/" + id + "/pdf";
     const a2 = el("a", "btn", "⬇ ChordPro"); a2.href = "db/songs/" + id + "/chordpro";

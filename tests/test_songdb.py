@@ -697,3 +697,131 @@ def test_web_tags_need_password(client, monkeypatch):
     assert client.post("/db/tags/bulk", json={"ids": [sid], "name": "X"}).status_code == 401
     assert client.post("/db/tags/suggest").status_code == 401
     assert client.get("/db/tags").status_code == 200
+
+
+# ── Note (notni zapis) ────────────────────────────────────────────────────────
+
+def _png():
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 20), "white").save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _zip(name, content=b"<x/>"):
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(name, content)
+    return buf.getvalue()
+
+
+MUSICXML = (b'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE score-partwise>\n'
+            b'<score-partwise version="3.1"><part-list/></score-partwise>')
+
+
+def test_notes_types_and_validation(tmp_path):
+    import songnotes
+    ok = {
+        "Abba Oče.pdf": chord_render.render_pdf([_song_v2()]),
+        "sopran.png": _png(),
+        "gitara.jpg": b"\xff\xd8\xff\xe0" + b"0" * 20,
+        "x.webp": b"RIFF\x10\x00\x00\x00WEBPVP8 " + b"0" * 10,
+        "zbor.musicxml": MUSICXML,
+        "zbor.xml": MUSICXML,
+        "zbor.mxl": _zip("score.xml", MUSICXML),
+        "klavir.mscz": _zip("score.mscx"),
+        "klavir.mscx": b"<?xml version='1.0'?><museScore version='4.0'></museScore>",
+        "melodija.mid": b"MThd\x00\x00\x00\x06\x00\x01",
+    }
+    for name, data in ok.items():
+        songnotes.check_file(name, data)
+    bad = {
+        "slika.svg": b"<svg></svg>",
+        "virus.exe": b"MZ",
+        "lazni.pdf": _png(),                       # PNG preimenovan u .pdf
+        "nije.xml": b"<html></html>",              # XML koji nije MusicXML
+        "prazno.png": b"",
+        "nije.mxl": b"PK nije zip",
+    }
+    for name, data in bad.items():
+        with pytest.raises(songnotes.NoteError):
+            songnotes.check_file(name, data)
+    assert songnotes.clean_name("../../etc/passwd", "x") == "passwd"
+    assert songnotes.clean_name("a\x00b\nc.pdf", "x") == "abc.pdf"
+
+
+def test_notes_db_add_list_rename_delete(conn, tmp_path):
+    sid = songdb.import_songs(conn, [_song_v2()], "a.pdf")["added"][0]["id"]
+    n1 = songdb.add_note(conn, sid, "Abba Oče – sopran.png", _png())
+    n2 = songdb.add_note(conn, sid, "zbor.musicxml", MUSICXML, name="Zbor SATB")
+    assert n1["name"] == "Abba Oče – sopran" and n1["kind"] == "image" and n1["inline"]
+    assert n2["name"] == "Zbor SATB" and n2["kind"] == "musicxml" and not n2["inline"]
+    assert songdb.add_note(conn, 999, "x.png", _png()) is None
+    notes = songdb.get_song(conn, sid)["notes"]
+    assert [n["id"] for n in notes] == [n1["id"], n2["id"]]
+    assert songdb.list_songs(conn)["items"][0]["notes_count"] == 2
+    # datoteka je odvojeno, pod nasumičnim imenom
+    meta, path = songdb.get_note(conn, n1["id"])
+    assert path.parent.name == "note" and path.read_bytes() == _png()
+    assert "Abba" not in path.name
+    # tekst i akordi pjesme se ne mijenjaju
+    assert songdb.get_song(conn, sid)["sections"] == _song_v2()["sections"]
+    assert songdb.rename_note(conn, n1["id"], "Sopran")
+    with pytest.raises(ValueError):
+        songdb.rename_note(conn, n1["id"], "  ")
+    assert songdb.delete_note(conn, n1["id"]) and not path.exists()
+    assert not songdb.delete_note(conn, n1["id"])
+    _m2, path2 = songdb.get_note(conn, n2["id"])
+    assert songdb.delete_song(conn, sid) and not path2.exists()     # note idu s pjesmom
+    assert conn.execute("SELECT COUNT(*) FROM attachments").fetchone()[0] == 0
+
+
+def test_web_notes(client):
+    _upload(client, chord_render.render_pdf([_song_v2()]))
+    sid = client.get("/db/songs").get_json()["items"][0]["id"]
+    pdf = chord_render.render_pdf([_song_v2()])
+    r = client.post(f"/db/songs/{sid}/notes", data={"file": [(io.BytesIO(pdf), "Abba Oče.pdf"),
+                                                            (io.BytesIO(b"<svg/>"), "x.svg"),
+                                                            (io.BytesIO(MUSICXML), "zbor.musicxml")]},
+                    content_type="multipart/form-data")
+    body = r.get_json()
+    assert r.status_code == 200 and len(body["added"]) == 2 and len(body["errors"]) == 1
+    pid, xid = body["added"][0]["id"], body["added"][1]["id"]
+    f = client.get(f"/db/notes/{pid}")
+    assert f.status_code == 200 and f.mimetype == "application/pdf" and f.data == pdf
+    assert "inline" in f.headers["Content-Disposition"] and f.headers["X-Content-Type-Options"] == "nosniff"
+    assert "attachment" in client.get(f"/db/notes/{pid}?download=1").headers["Content-Disposition"]
+    assert "attachment" in client.get(f"/db/notes/{xid}").headers["Content-Disposition"]   # MusicXML se preuzima
+    assert client.patch(f"/db/notes/{xid}", json={"name": "Zbor"}).get_json()["ok"]
+    song = client.get(f"/api/v1/songs/{sid}").get_json()
+    assert [n["name"] for n in song["notes"]] == ["Abba Oče", "Zbor"]
+    assert client.get(f"/api/v1/notes/{pid}").data == pdf
+    assert "notes" in json.loads(client.get("/api/v1/export").data)["songs"][0]
+    assert client.get("/db/songs").get_json()["items"][0]["notes_count"] == 2
+    bad = client.post(f"/db/songs/{sid}/notes", data={"file": (io.BytesIO(b"MZ"), "x.exe")},
+                      content_type="multipart/form-data")
+    assert bad.status_code == 400 and "PDF" in bad.get_json()["error"]
+    assert client.post(f"/db/songs/{sid}/notes").status_code == 400
+    assert client.post("/db/songs/999/notes", data={"file": (io.BytesIO(pdf), "a.pdf")},
+                       content_type="multipart/form-data").status_code == 404
+    assert client.delete(f"/db/notes/{pid}").get_json()["ok"]
+    assert client.get(f"/db/notes/{pid}").status_code == 404
+    assert b'accept=".pdf,.png' in client.get("/baza").data
+
+
+def test_web_notes_need_password_and_token(client, monkeypatch):
+    monkeypatch.setenv("DB_PASSWORD", "tajna")
+    monkeypatch.setenv("API_TOKEN", "tok")
+    pw = {"X-DB-Password": "tajna"}
+    _upload(client, chord_render.render_pdf([_song_v2()]), headers=pw)
+    sid = client.get("/db/songs").get_json()["items"][0]["id"]
+    up = lambda h: client.post(f"/db/songs/{sid}/notes", data={"file": (io.BytesIO(_png()), "a.png")},
+                               content_type="multipart/form-data", headers=h)
+    assert up({}).status_code == 401
+    nid = up(pw).get_json()["added"][0]["id"]
+    assert client.delete(f"/db/notes/{nid}").status_code == 401
+    assert client.patch(f"/db/notes/{nid}", json={"name": "x"}).status_code == 401
+    assert client.get(f"/db/notes/{nid}").status_code == 200              # stranica čita
+    assert client.get(f"/api/v1/notes/{nid}").status_code == 401           # API traži token
+    assert client.get(f"/api/v1/notes/{nid}?token=tok").status_code == 200
