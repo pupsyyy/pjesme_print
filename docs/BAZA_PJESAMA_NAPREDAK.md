@@ -86,3 +86,24 @@ docker compose up -d --build
 
 ## Grana / PR
 Grana `claude/app-migration-hostinger-vps-q2z32b`, nova od main nakon PR #15.
+
+---
+# Faza 2 — uvoz pjesmarica iz Worda (TABOR PJESMARICA 2017)
+
+PR #16 (baza) spojen u main. Nova grana od main-a.
+
+Izvor: Google Drive "TABOR PJESMARICA 2017.pdf" (fileId 1rhycukB6t1ut1qY3kdt4aHIsLF1eMjLV),
+110 str., Acrobat PDFMaker for Word, font Maiandra GD. NIJE u repou.
+- str. 1 naslovnica; str. 2–110 = po jedna pjesma (109), str. 31 i 32 isti naslov
+  "HVALOSPJEV LJUBAVI" ali različite pjesme (podnaslov "(KEFA)" / "(Frama Široki Brijeg)")
+- glava/podnožje: slike + crte (rect) na y≈64 i y≈770 → sadržaj između
+- naslov: MaiandraGD-DemiBold 16 crni, centriran, podcrtan (rect ispod, y≈130); str.16 Arial-Bold
+- ispod naslova ponekad DemiBold 12/14: "(KEFA)" → podnaslov; "capo 3 fret" (+ superskript "rd" 7pt) → meta Capo
+- akordi: CRVENI (1,0,0), DemiBold/Regular 15, redak s pravim razmacima (Word), centriran
+- tekst: Regular 16 crni (ponekad Italic ili DemiBold = istaknuto), centriran; redci ~19.2 pt
+- prazan odlomak (~+19 pt) = nova sekcija; nema labela Verse/Chorus
+- tokeni poput "DG", "AHE", "FGa" = više akorda na jednom slogu (čuvaju se kako su napisani)
+- sidrenje: VIZUALNO (x akorda → slovo ispod), jer su redci centrirani neovisno
+
+Pravilo duplikata (korisnik 2026-10-16): "ako već imamo pjesmu ne dodajemo je, samo one koje nemamo"
+→ tekst ≥ 95 % isti = već imamo (preskoči tiho), 80–95 % = pitaj, < 80 % = dodaj.
