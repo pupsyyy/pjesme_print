@@ -586,8 +586,10 @@ def songs_from_pages(pages, filename=""):
         if pg is None:
             continue
         has_chords = any(ln.get("chords") for b in pg["blocks"] for ln in b["lines"])
-        if pg.get("format") == "word" and not pg["title"] and not has_chords \
-                and (not songs or not pg["blocks"] or pno == 1):
+        has_lines = any(b["lines"] for b in pg["blocks"])
+        if pg.get("format") == "word" and (
+                not has_lines
+                or (not pg["title"] and not has_chords and (not songs or pno == 1))):
             # naslovnica, sadržaj i sl. u pjesmarici iz Worda — nije pjesma
             warnings.append(f"Stranica {pno} preskočena (nije pjesma).")
             continue

@@ -22,7 +22,12 @@ from pathlib import Path
 
 import chord_extract
 
-SIMILARITY_THRESHOLD = 0.80
+SIMILARITY_THRESHOLD = 0.80   # tekst ≥ 80 % sličan (drukčiji naslov) -> pitaj
+SAME_RATIO = 0.95             # tekst ≥ 95 % isti -> već imamo
+SAME_TITLE = 0.80             # sličan naslov ...
+SAME_CONTAIN = 0.90           # ... i kraća verzija ≥ 90 % sadržana u duljoj -> već imamo
+SAME_MIN_WORDS = 6            # (za sadržanost kraća verzija mora imati barem toliko riječi)
+LONGER = 1.15                 # nova verzija ima > 15 % više teksta -> ipak pitaj
 DEFAULT_DB = Path(__file__).with_name("data") / "pjesme.db"
 
 SCHEMA = """
@@ -90,7 +95,15 @@ def connect(path=None):
     if str(path) != ":memory:":
         conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn):
+    """Nadogradnja postojeće baze (stupci dodani u kasnijim verzijama)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(pending)")}
+    if "reason" not in cols:
+        conn.execute("ALTER TABLE pending ADD COLUMN reason TEXT NOT NULL DEFAULT 'similar'")
 
 
 # ── Normalizacija i usporedba ─────────────────────────────────────────────────
@@ -217,16 +230,62 @@ def _add_source(conn, song_id, source):
                      (json.dumps(sources, ensure_ascii=False), song_id))
 
 
-def find_similar(conn, song, threshold=SIMILARITY_THRESHOLD):
-    """Najsličnija postojeća pjesma -> (id, naslov, sličnost) ili None."""
+def title_similarity(a, b):
+    """Sličnost naslova (0..1); naslov sadržan u drugom ("Nešto više od Jone") = 1."""
+    a, b = norm(a), norm(b)
+    if not a or not b:
+        return 0.0
+    if a == b or f" {a} " in f" {b} " or f" {b} " in f" {a} ":
+        return 1.0
+    return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+
+
+def containment(a, b):
+    """Koliki dio kraće verzije (riječi, redom) postoji u duljoj (0..1)."""
+    if not a or not b:
+        return 0.0
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    return sum(m.size for m in sm.get_matching_blocks()) / min(len(a), len(b))
+
+
+def find_match(conn, song, threshold=SIMILARITY_THRESHOLD):
+    """Postojeća pjesma koja je ista ili slična novoj.
+
+    Vrati dict {id, title, similarity, kind, longer} ili None:
+      kind "same"    — ista pjesma (moguće druga verzija/duljina)
+      kind "similar" — tekst ≥ threshold sličan, drukčiji naslov
+      longer         — nova verzija ima osjetno više teksta od postojeće
+    """
     words = compare_words(song)
     best = None
     for row in conn.execute("SELECT id, title, norm_lyrics FROM songs"):
         other = row["norm_lyrics"].split()
-        r = similarity(words, other, threshold)
-        if r >= threshold and (best is None or r > best[2]):
-            best = (row["id"], row["title"], r)
+        ratio = similarity(words, other, threshold)
+        kind = None
+        if ratio >= SAME_RATIO:
+            kind = "same"
+        elif (title_similarity(song["title"], row["title"]) >= SAME_TITLE
+              and min(len(words), len(other)) >= SAME_MIN_WORDS
+              and containment(words, other) >= SAME_CONTAIN):
+            kind = "same"
+        elif ratio >= threshold:
+            kind = "similar"
+        if kind is None:
+            continue
+        score = (kind == "same", ratio)
+        if best is None or score > best["_score"]:
+            best = {"id": row["id"], "title": row["title"], "similarity": ratio,
+                    "kind": kind, "longer": len(words) > LONGER * len(other),
+                    "_score": score}
+    if best:
+        best.pop("_score")
     return best
+
+
+def find_similar(conn, song, threshold=SIMILARITY_THRESHOLD):
+    """Najsličnija postojeća pjesma -> (id, naslov, sličnost) ili None."""
+    m = find_match(conn, song, threshold)
+    return (m["id"], m["title"], m["similarity"]) if m else None
 
 
 def add_song(conn, song, source=None, threshold=SIMILARITY_THRESHOLD):
@@ -244,16 +303,23 @@ def add_song(conn, song, source=None, threshold=SIMILARITY_THRESHOLD):
     if row:
         return {"status": "duplicate", "title": song["title"],
                 "existing_id": row["existing_id"], "pending_id": row["id"]}
-    sim = find_similar(conn, song, threshold)
-    if sim:
+    m = find_match(conn, song, threshold)
+    if m and m["kind"] == "same" and not m["longer"]:
+        # već imamo tu pjesmu (druga verzija istog teksta) — ne dodaje se
+        _add_source(conn, m["id"], source)
+        return {"status": "duplicate", "title": song["title"], "existing_id": m["id"],
+                "existing_title": m["title"], "similarity": round(m["similarity"], 4),
+                "reason": "same_song"}
+    if m:
+        reason = "longer" if m["kind"] == "same" else "similar"
         cur = conn.execute(
             "INSERT INTO pending (data, existing_id, similarity, fingerprint, source,"
-            " created_at) VALUES (?,?,?,?,?,?)",
-            (json.dumps(song, ensure_ascii=False), sim[0], sim[2], fp,
-             json.dumps(source or {}, ensure_ascii=False), _now()))
+            " created_at, reason) VALUES (?,?,?,?,?,?,?)",
+            (json.dumps(song, ensure_ascii=False), m["id"], m["similarity"], fp,
+             json.dumps(source or {}, ensure_ascii=False), _now(), reason))
         return {"status": "conflict", "title": song["title"], "pending_id": cur.lastrowid,
-                "existing_id": sim[0], "existing_title": sim[1],
-                "similarity": round(sim[2], 4)}
+                "existing_id": m["id"], "existing_title": m["title"],
+                "similarity": round(m["similarity"], 4), "reason": reason}
     sid = _insert(conn, song, source)
     return {"status": "added", "title": song["title"], "id": sid}
 
@@ -338,6 +404,7 @@ def list_pending(conn):
         new = json.loads(p["data"])
         out.append({
             "id": p["id"], "similarity": p["similarity"], "created_at": p["created_at"],
+            "reason": p["reason"],
             "source": json.loads(p["source"]),
             "new": dict(new, numbers=chord_extract.numbers(new),
                         chordpro=chord_extract.to_chordpro(new)),
@@ -375,6 +442,14 @@ def resolve(conn, pending_id, action):
     except Exception:
         conn.execute("ROLLBACK")
         raise
+
+
+def resolve_all(conn, action):
+    """Ista odluka za sve slične pjesme koje čekaju. Vrati broj riješenih."""
+    if action not in RESOLVE_ACTIONS:
+        raise ValueError("Nepoznata odluka: " + str(action))
+    ids = [r["id"] for r in conn.execute("SELECT id FROM pending ORDER BY id")]
+    return sum(1 for pid in ids if resolve(conn, pid, action) is not None)
 
 
 def stats(conn):

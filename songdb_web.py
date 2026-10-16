@@ -154,6 +154,17 @@ def db_pending():
     return jsonify(items=songdb.list_pending(_conn()))
 
 
+@bp.post("/db/pending/all")
+def db_resolve_all():
+    denied = _require_write()
+    if denied:
+        return denied
+    action = (request.get_json(silent=True) or {}).get("action")
+    if action not in songdb.RESOLVE_ACTIONS:
+        return jsonify(error="Odluka mora biti: " + ", ".join(songdb.RESOLVE_ACTIONS)), 400
+    return jsonify(ok=True, resolved=songdb.resolve_all(_conn(), action))
+
+
 @bp.post("/db/pending/<int:pending_id>")
 def db_resolve(pending_id):
     denied = _require_write()
@@ -493,8 +504,11 @@ DB_PAGE = r"""<!doctype html>
       <h2>Ubaci PDF-ove pjesama</h2>
       <p>Iz svakog PDF-a izvlače se pjesme s tekstom, metapodacima i akordima<br>
          (svaki akord pamti točno slovo iznad kojeg stoji).</p>
-      <p>Iste pjesme se ne dupliraju, a za pjesme koje su ≥ 80 % slične postojećoj<br>
-         aplikacija te pita koju zadržati.</p>
+      <p>Pjesme koje već imamo ne dodaju se (ni druga verzija iste pjesme).<br>
+         Pita te samo kad nova verzija ima više teksta ili kad je tekst ≥ 80 %
+         sličan pjesmi drugog naslova.</p>
+      <p class="muted" style="font-size:.85rem">Prima PDF-ove iz aplikacije za pjesme
+         i pjesmarice iz Worda (npr. Tabor: naslov na vrhu stranice, akordi iznad teksta).</p>
       <p class="muted" style="font-size:.85rem">Druge aplikacije čitaju bazu preko
          <a href="api/v1" target="_blank">api/v1</a> · v__VERSION__</p>
     </div>
@@ -736,11 +750,16 @@ function showReport(reports) {
     const ul = el("ul", "rep");
     const li = (cls, t) => ul.append(el("li", cls, t));
     li("ok", "✓ dodano: " + r.added.length + (r.added.length ? " — " + r.added.map(x => x.title).join(", ") : ""));
-    if (r.duplicates.length) li("muted", "= već u bazi (preskočeno): " + r.duplicates.map(x => x.title).join(", "));
+    const same = r.duplicates.filter(x => x.reason === "same_song");
+    const exact = r.duplicates.filter(x => x.reason !== "same_song");
+    if (exact.length) li("muted", "= već u bazi, identične (preskočeno " + exact.length + "): " + exact.map(x => x.title).join(", "));
+    if (same.length) li("muted", "= već imamo, druga verzija iste pjesme (preskočeno " + same.length + "): " +
+       same.map(x => x.title + " → " + x.existing_title).join(", "));
     if (r.conflicts.length) {
       anyConflict = true;
-      li("warn", "⚠ slične postojećima (čekaju odluku): " +
-         r.conflicts.map(x => x.title + " ~ " + x.existing_title + " " + Math.round(x.similarity * 100) + " %").join(", "));
+      li("warn", "⚠ čekaju tvoju odluku (" + r.conflicts.length + "): " +
+         r.conflicts.map(x => x.title + " ~ " + x.existing_title +
+           (x.reason === "longer" ? " (nova ima više teksta)" : " " + Math.round(x.similarity * 100) + " %")).join(", "));
     }
     (r.warnings || []).forEach(w => li("muted", w));
     c.append(ul); box.append(c);
@@ -759,10 +778,28 @@ async function showPending() {
     box.append(el("h2", null, "Slične pjesme — koju zadržati?"));
     if (!data.items.length) { box.append(el("p", "muted", "Nema ničega za riješiti. ✓")); showView(box); return; }
     box.append(el("p", "muted", "Retci koji se razlikuju su označeni bojom."));
+    if (data.items.length > 1) {
+      const bulk = el("div", "actions");
+      bulk.append(el("span", "muted", "Za sve (" + data.items.length + "): "));
+      [["keep_existing", "Zadrži postojeće"], ["replace", "Zamijeni novima"], ["keep_both", "Zadrži obje"]].forEach(([a, label]) => {
+        const b = el("button", "btn", label);
+        b.onclick = async () => {
+          if (!confirm(label + " — za svih " + data.items.length + " pjesama?")) return;
+          try { const r = await json(await api("db/pending/all", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                                body: JSON.stringify({ action: a }) }));
+                toast("Riješeno: " + r.resolved); await Promise.all([loadList(), refreshStats()]); showPending(); }
+          catch (e) { toast(e.message, true); }
+        };
+        bulk.append(b);
+      });
+      box.append(bulk);
+    }
     data.items.forEach(p => {
       const c = el("div", "card");
       const h = el("h3");
-      h.append(document.createTextNode(p.new.title + "  "), el("span", "simbadge", Math.round(p.similarity * 100) + " % slično"));
+      h.append(document.createTextNode(p.new.title + "  "),
+               el("span", "simbadge", p.reason === "longer" ? "ista pjesma, nova ima više teksta"
+                                                            : Math.round(p.similarity * 100) + " % slično"));
       c.append(h);
       const src = p.source && p.source.file ? (p.source.file + (p.source.pages && p.source.pages.length ? ", str. " + p.source.pages.join(", ") : "")) : "";
       const cmp = el("div", "cmp");
