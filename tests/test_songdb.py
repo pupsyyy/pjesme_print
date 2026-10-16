@@ -576,7 +576,7 @@ def test_word_songbook_import():
     abba, hv = res["songs"]
     assert abba["layout"]["source_format"] == "word"
     v, r = abba["sections"]
-    assert v["label"] is None and r["label"] == "Refren"
+    assert v["label"] is None and r["label"] is None   # kurziv se čuva, ali nije "Refren"
     assert v["lines"][0] == {"text": "Abba, Oce! Abba, Oce!",
                              "chords": [[0, "G"], [6, "C"], [11, "D"], [17, "G"]]}
     assert v["lines"][1]["chords"] == [[0, "h"], [5, "F#"], [16, "h"], [19, "D7"]]

@@ -113,6 +113,12 @@ Pravilo duplikata (korisnik 2026-10-16): "ako već imamo pjesmu ne dodajemo je, 
       (provjera: svaki crveni token i svaka riječ sa stranice je u pjesmi), 5.7 s za 110 str.
 - [x] sidrenje: najbliži početak SLOVA (ne interpunkcije), izjednačenje → lijevo
       (kalibrirano na str. 2, 3, 16; vizualna usporedba str. 2, 3, 16, 31, 42, 85 OK)
-- [x] kurziv iz Worda = nagib u matrici (m[2] ≈ 0.33·size); istaknuta sekcija → "Refren" (64/109)
+- [x] kurziv iz Worda = nagib u matrici (m[2] ≈ 0.33·size); čuva se u fmt. NE označava se "Refren":
+      u Taboru je kurziv nekad kitica (npr. "Jona": kurziv = "Tu je Kralj kraljeva" = Verse)
 - [x] renderer: podebljani/kurzivni redci s akordima (OpenSans-Italic 1.10 dodan), najviše 1 vidljiva crtica
-- [ ] pravilo duplikata ≥95 % + skupna odluka   - [ ] testovi Word formata   - [ ] PR
+- [x] pravilo duplikata: ista pjesma (naslov ≥0.8 + sadržanost ≥0.9, ili tekst ≥0.95) → ne dodaje se;
+      dulja verzija (>15 % više riječi) → pita; tekst ≥0.8 drugi naslov → pita. Skupna odluka /db/pending/all.
+      Simulacija: baza 17 + Tabor → dodano 105, preskočeno 3 (Dubine, Gospode trebam te, Sveto Tijelo),
+      pita 1 (Jona, Tabor ima više kitica). Migracija: pending.reason (ALTER TABLE).
+- [x] testovi Word formata (sintetska pjesmarica) — 67 prolazi
+- [ ] PR

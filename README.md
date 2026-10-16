@@ -44,10 +44,23 @@ njih nastaje baza (SQLite) u kojoj je za svaku pjesmu:
   počinje (kao `[G]` u ChordPro formatu):
   `{"text": "Bože svet si aleluja,", "chords": [[5, "G"], [16, "C"]]}`
 
-**Duplikati**: identična pjesma se preskače; ako je tekst nove pjesme
-**≥ 80 % sličan** postojećoj, uvoz je ne sprema nego pita — usporedba
-jedne uz drugu (razlike označene) i odluka *Zadrži postojeću* /
-*Zamijeni novom* (isti id) / *Zadrži obje*.
+**Duplikati** — pjesme koje već imamo ne dodaju se:
+- identična pjesma → preskače se;
+- **druga verzija iste pjesme** (sličan naslov i kraća verzija ≥ 90 % sadržana
+  u duljoj, ili tekst ≥ 95 % isti — npr. ista pjesma s drugim akordima ili
+  bez jedne kitice) → preskače se, uz napomenu u izvještaju;
+- ako nova verzija ima **osjetno više teksta** (dodatne kitice) ili je tekst
+  **≥ 80 % sličan** pjesmi drugog naslova → aplikacija pita: usporedba jedne
+  uz drugu (razlike označene) i odluka *Zadrži postojeću* / *Zamijeni novom*
+  (isti id) / *Zadrži obje* — pojedinačno ili „Za sve".
+
+**Pjesmarice iz Worda** (npr. TABOR PJESMARICA): svaka stranica s naslovom
+na vrhu = pjesma; glava i podnožje stranice se preskaču; akordi su redak
+iznad teksta (crveni ili samo akordi) i vežu se na slovo iznad kojeg stoje;
+podnaslov u zagradi i „capo" ulaze u metapodatke, a kurziv/podebljani
+retci se čuvaju. Ispis iz baze je u istom izgledu kao i sve ostale pjesme.
+Provjereno na TABOR PJESMARICI 2017: 109 pjesama, svih 2 250 akorda i
+7 483 riječi sačuvano.
 
 **Točnost**: iz baze se pjesma iscrtava u izvornom izgledu aplikacije
 (Open Sans 1.10, isti raspored) i uspoređuje s izvornim PDF-om glif po glif.

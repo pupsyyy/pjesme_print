@@ -8,6 +8,10 @@ pravim razmacima, tekst i akordi centrirani svaki za sebe.
 Budući da su redci centrirani neovisno, akord se veže VIZUALNO: na slovo
 iznad kojeg stoji njegov početak. U bazu ide sadržaj (tekst + indeksi
 akorda), a ispis iz baze je u standardnom izgledu (chord_render).
+
+Kurziv/podebljanje redaka se čuva (fmt), ali se iz njega NE zaključuje da je
+sekcija refren: u Tabor pjesmarici je kurzivom ponekad refren, a ponekad
+kitica — pogrešna oznaka u bazi bila bi gora od nikakve.
 """
 
 import re
@@ -258,31 +262,11 @@ def parse_page(page):
         k += 1
     if lines:
         sections.append({"label": None, "lines": lines})
-    _label_refrains(sections)
 
     return {"title": title, "key": "", "subtitle": subtitle, "meta": meta,
             "profile": "v2", "format": "word", "columns": 1, "page_numbers": False,
             "blocks": [dict(s) for s in sections], "warnings": [],
             "red_tokens": sum(1 for r in rows if r.red for _w in r.words())}
-
-
-def _emphasized(sec):
-    texts = [ln for ln in sec["lines"] if ln["text"].strip()]
-    return bool(texts) and all((ln.get("fmt") or {}).get("text") in ("bold", "italic")
-                               for ln in texts)
-
-
-def _label_refrains(sections):
-    """Sekcija u kojoj je sav tekst istaknut (kurziv/podebljano) = refren.
-
-    Samo ako u pjesmi postoji i neistaknuta sekcija (inače je cijela pjesma
-    jednako napisana i istaknutost ne znači ništa).
-    """
-    marks = [_emphasized(s) for s in sections]
-    if any(marks) and not all(marks):
-        for s, m in zip(sections, marks):
-            if m:
-                s["label"] = "Refren"
 
 
 def looks_like_word_page(page):

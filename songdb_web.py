@@ -432,6 +432,8 @@ DB_PAGE = r"""<!doctype html>
                 vertical-align: bottom; white-space: pre; }
   .sheet .ch { font-weight: 700; color: var(--accent); padding-right: .3em; min-height: 1.35em; }
   .sheet .ly { min-height: 1.35em; }
+  .sheet .ln.it .ly, .sheet .ln.it:not(:has(.seg)) { font-style: italic; }
+  .sheet .ln.bo .ly, .sheet .ln.bo:not(:has(.seg)) { font-weight: 700; }
   .sheet .ly.hy::after { content: "-"; }
   .sheet .conly { font-weight: 700; color: var(--accent); }
   .sheet .meta { color: var(--muted); }
@@ -571,7 +573,8 @@ async function json(res) {
 
 /* ── Prikaz pjesme s akordima ── */
 function renderLine(ln, mark) {
-  const div = el("div", "ln" + (mark ? " diff" : ""));
+  const st = (ln.fmt || {}).text;
+  const div = el("div", "ln" + (mark ? " diff" : "") + (st === "italic" ? " it" : st === "bold" ? " bo" : ""));
   const text = ln.text || "";
   const chords = (ln.chords || []).slice().sort((a, b) => a[0] - b[0]);
   if (!chords.length) { div.textContent = text || " "; return div; }
