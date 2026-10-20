@@ -211,3 +211,13 @@ Korisnikov primjer: "Isus Najljepše ime - Full Score.pdf" (Sibelius 7.5, SATB, 
       OMR u pregledniku (36 s), prikaz + transpozicija, premještanje nota
 - [x] Docker sandbox: WITH_OMR=1 slika, uvoz preko HTTP-a + OMR posao u kontejneru = done
 - [ ] CI zelen (docker-omr), PR #17 opis dopuniti, korisnik spaja
+
+---
+# 2026-10-20 — "pogledaj kako unaprijediti sve ovo"
+Pregled koda (PR #17) → 10 nalaza, svi ispravljeni (commit 2c9be5a, 97 testova; Tabor simulacija
+nepromijenjena: 105/3/1). Prijedlozi za dalje (čeka izbor korisnika):
+1. uređivanje pjesme u bazi (naslov, tekst, akordi) 2. transpozicija akorda (prikaz + PDF)
+3. popis za misu (Ulazna→Završna, PDF/link za zbor) 4. automatski backup (dnevno, čuva 14)
+5. vježbanje glasova iz MusicXML (zvuk po dionici) 6. tekst iz nota za pjesme "samo note"
+7. uvoz velikog ZIP-a u pozadini s napretkom 8. spajanje dvije pjesme (duplikati)
+9. podjela songdb_web.py (HTML/JS u zasebne datoteke)
