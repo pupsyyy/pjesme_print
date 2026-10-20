@@ -458,3 +458,93 @@ def test_engraved_fixture_and_audiveris_input_size(tmp_path):
     omr._shrink_image(big, small, convert=True)
     with Image.open(small) as im:
         assert im.format == "PNG" and im.width * im.height <= omr.MAX_PIXELS
+
+
+# ── Regresije iz pregleda koda ────────────────────────────────────────────────
+
+def test_short_different_song_with_contained_title_asks(conn):
+    songdb.import_songs(conn, [_song("Isus", "Isus je Gospodin moj i Bog nad svima",
+                                     "on je put istina i život vječni", "slavimo ga svi zajedno danas",
+                                     "pjevajmo mu novu pjesmu radosno")], "a.pdf")
+    r = songdb.import_songs(conn, [_song("Isus je Gospodin", "Isus je Gospodin moj i Bog")], "b.pdf")
+    assert not r["duplicates"] and r["conflicts"][0]["reason"] == "similar"
+
+
+def test_split_gap_tolerates_rounded_coordinates():
+    import chord_extract
+    import opensans
+    sw, hw = opensans.SPACE * 12, chord_extract.HYPHEN_W * 12
+    assert chord_extract._split_gap(2 * sw + hw, sw, hw, False, True) == (2, 1)
+    assert chord_extract._split_gap(2 * sw + hw + 0.05, sw, hw, False, True) == (2, 1)
+    assert chord_extract._split_gap(3 * sw - 0.04, sw, hw, False, True) == (3, 0)
+
+
+def test_untitled_text_with_score_imports_only_notes(conn):
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.setFont("Helvetica", 10)
+    for i in range(6):
+        c.drawString(60, H - 80 - i * 14, f"zahvala zboru i svima koji su pomogli, redak {i}")
+    c.showPage()
+    c.save()
+    pdf = _merge(buf.getvalue(), _score_pdf(title="Moja pjesma"))
+    rep = songimport.import_upload(conn, "x.pdf", pdf)[0]
+    assert not rep["added"] and rep["notes"][0]["song_title"] == "Moja pjesma"
+    assert [s["title"] for s in songdb.list_songs(conn)["items"]] == ["Moja pjesma"]
+
+
+def test_note_extraction_failure_is_reported_not_raised(conn, monkeypatch):
+    def boom(*_a):
+        raise RuntimeError("pdfium")
+    monkeypatch.setattr(scorepages, "extract_pages", boom)
+    pdf = _merge(chord_render.render_pdf([_song_v2()]), _score_pdf(title="Druga"))
+    rep = songimport.import_upload(conn, "x.pdf", pdf)[0]
+    assert rep["added"] and rep["notes"][0]["status"] == "error"
+    assert songdb.stats(conn)["songs"] == 1                  # nema prazne pjesme
+
+
+def _fake_audiveris(tmp_path, monkeypatch):
+    fake = tmp_path / "Audiveris"
+    fake.write_text(FAKE_AUDIVERIS)
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    mxl = tmp_path / "rezultat.mxl"
+    mxl.write_bytes(_zip("score.xml", MUSICXML))
+    monkeypatch.setattr(omr, "AUDIVERIS", str(fake))
+    monkeypatch.setenv("FAKE_MXL", str(mxl))
+
+
+def _wait(conn, job_id):
+    for _ in range(100):
+        job = omr.get_job(conn, job_id)
+        if job["status"] in ("done", "error"):
+            return job
+        time.sleep(0.1)
+    return job
+
+
+def test_omr_resume_after_restart_and_job_crash(conn, tmp_path, monkeypatch):
+    _fake_audiveris(tmp_path, monkeypatch)
+    rep = songimport.import_upload(conn, "a.pdf", _score_pdf(title="Prva"))[0]
+    nid = songdb.list_notes(conn, rep["notes"][0]["song_id"])[0]["id"]
+    # posao je "radio" kad se kontejner srušio
+    jid = conn.execute("INSERT INTO omr_jobs (note_id, status, created_at, started_at)"
+                       " VALUES (?, 'running', '2026-01-01', '2099-01-01')", (nid,)).lastrowid
+    omr._resumed.discard(str(conn.db_file))
+    omr.resume(conn.db_file)
+    assert _wait(conn, jid)["status"] == "done"
+    # neočekivana greška u jednom poslu ne zaustavlja ostale
+    rep2 = songimport.import_upload(conn, "b.pdf", _score_pdf(title="Druga", lyrics=("x",)))[0]
+    nid2 = songdb.list_notes(conn, rep2["notes"][0]["song_id"])[0]["id"]
+    real = omr._run
+    calls = []
+
+    def flaky(c, job):
+        calls.append(job["id"])
+        if len(calls) == 1:
+            raise RuntimeError("baza zaključana")
+        return real(c, job)
+    monkeypatch.setattr(omr, "_run", flaky)
+    j1 = conn.execute("INSERT INTO omr_jobs (note_id, created_at) VALUES (?, 'x')", (nid,)).lastrowid
+    j2 = omr.enqueue(conn, nid2)["id"]
+    assert _wait(conn, j1)["status"] == "error" and "Neočekivana" in omr.get_job(conn, j1)["message"]
+    assert _wait(conn, j2)["status"] == "done"

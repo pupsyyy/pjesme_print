@@ -31,6 +31,7 @@ SAME_RATIO = 0.95             # tekst ≥ 95 % isti -> već imamo
 SAME_TITLE = 0.80             # sličan naslov ...
 SAME_CONTAIN = 0.90           # ... i kraća verzija ≥ 90 % sadržana u duljoj -> već imamo
 SAME_MIN_WORDS = 6            # (za sadržanost kraća verzija mora imati barem toliko riječi)
+SAME_OVERLAP = 0.50           # ... a tekst barem upola isti (inače pitaj)
 LONGER = 1.15                 # nova verzija ima > 15 % više teksta -> ipak pitaj
 DEFAULT_DB = Path(__file__).with_name("data") / "pjesme.db"
 # pjesma koja (zasad) ima samo note — bez ijednog retka teksta i akorda
@@ -121,13 +122,28 @@ def connect(path=None):
     conn.execute("PRAGMA busy_timeout = 10000")
     if str(path) != ":memory:":
         conn.execute("PRAGMA journal_mode = WAL")
-    conn.executescript(SCHEMA)
-    conn.executescript(songnotes.SCHEMA)
-    conn.executescript(songlinks.SCHEMA)
-    _migrate(conn)
-    conn.executescript(omr.SCHEMA)
+    key = str(path.resolve()) if str(path) != ":memory:" else None
+    if key is None or key not in _READY:
+        # shema i nadogradnja jednom po procesu (ne na svaki zahtjev), pod
+        # pisaćom bravom da dva gunicorn workera ne nadograđuju istodobno
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for script in (SCHEMA, songnotes.SCHEMA, songlinks.SCHEMA, omr.SCHEMA):
+                for stmt in script.split(";"):
+                    if stmt.strip():
+                        conn.execute(stmt)
+            _migrate(conn)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        if key:
+            _READY.add(key)
     conn.db_file = None if str(path) == ":memory:" else path
     return conn
+
+
+_READY = set()                # baze kojima je u ovom procesu shema već provjerena
 
 
 def _migrate(conn):
@@ -324,7 +340,12 @@ def find_match(conn, song, threshold=SIMILARITY_THRESHOLD):
         elif (title_similarity(song["title"], row["title"]) >= SAME_TITLE
               and min(len(words), len(other)) >= SAME_MIN_WORDS
               and containment(words, other) >= SAME_CONTAIN):
-            kind = "same"
+            # kraća verzija sadržana u duljoj: tiho preskoči ako je naslov
+            # (gotovo) isti ili tekst većim dijelom isti ("Jona": 2 od 3 retka);
+            # inače ("Isus" / "Isus je Gospodin", malo zajedničkog) -> pitaj
+            same = (note_title_similarity(song["title"], row["title"]) >= SAME_TITLE
+                    or ratio >= SAME_OVERLAP)
+            kind = "same" if same else "similar"
         elif ratio >= threshold:
             kind = "similar"
         if kind is None:
@@ -514,10 +535,17 @@ def list_songs(conn, q="", limit=50, offset=0, tag=None, exclude=()):
 def export_all(conn):
     rows = conn.execute("SELECT * FROM songs ORDER BY id").fetchall()
     tags = _tags_for(conn, [r["id"] for r in rows])
+    notes, links = {}, {}
+    for r in conn.execute("SELECT * FROM attachments ORDER BY id"):     # sve odjednom
+        notes.setdefault(r["song_id"], []).append(_note_row(r))
+    for r in conn.execute("SELECT * FROM song_links ORDER BY id"):
+        links.setdefault(r["song_id"], []).append(_link_row(r))
     out = []
     for r in rows:
-        song = _row_to_song(r, tags=tags.get(r["id"], []), notes=list_notes(conn, r["id"]))
-        song["links"] = list_links(conn, r["id"])
+        song = _row_to_song(r, tags=tags.get(r["id"], []), notes=notes.get(r["id"], []))
+        song["links"] = sorted(links.get(r["id"], []),
+                               key=lambda x: (songlinks.voice_order(x["voice"]), x["id"]))
+        song["has_text"] = _has_text(r)
         out.append(song)
     return out
 

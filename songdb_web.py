@@ -35,6 +35,8 @@ def _conn():
     """Jedna veza prema bazi po zahtjevu (zatvara se na kraju zahtjeva)."""
     if "songdb_conn" not in g:
         g.songdb_conn = songdb.connect()
+        if g.songdb_conn.db_file:
+            omr.resume(g.songdb_conn.db_file)      # poslovi prekinuti restartom
     return g.songdb_conn
 
 
@@ -998,7 +1000,8 @@ async function loadTags() {
 function setTagFilter(t) { state.tag = t; loadTags(); loadList().catch(e => toast(e.message, true)); }
 async function refreshAll() {
   await Promise.all([loadList(), refreshStats(), loadTags()]);
-  if (state.current) openSong(state.current, true);
+  // pjesmu ponovo prikaži samo ako je ona na ekranu (ne preko odluka/izvještaja)
+  if (state.current && state.view === "song") await openSong(state.current, true);
 }
 function renderList() {
   const ul = $("list"); ul.innerHTML = "";
@@ -1413,7 +1416,7 @@ async function openSong(id, keepScroll) {
     del.onclick = async () => {
       if (!confirm("Obrisati pjesmu \"" + s.title + "\" iz baze?")) return;
       try { await json(await api("db/songs/" + id, { method: "DELETE" }));
-            state.sel.delete(id); state.current = null; toast("Pjesma obrisana.");
+            state.sel.delete(id); state.current = null; state.view = ""; toast("Pjesma obrisana.");
             $("view").classList.add("hidden"); $("welcome").classList.remove("hidden");
             await refreshAll(); }
       catch (e) { toast(e.message, true); }
@@ -1424,6 +1427,7 @@ async function openSong(id, keepScroll) {
     const src = (s.sources || []).map(x => x.file + (x.pages && x.pages.length ? " (str. " + x.pages.join(", ") + ")" : "")).join("; ");
     if (src) box.append(el("p", "muted", "Izvor: " + src));
     const top = $("main").scrollTop;
+    state.view = "song";
     showView(box, keepScroll);
     if (keepScroll) $("main").scrollTop = top;
   } catch (e) { toast(e.message, true); }
@@ -1503,6 +1507,7 @@ function showReport(reports, tags) {
   if (anyConflict) {
     const b = el("button", "btn primary", "Riješi slične pjesme →"); b.onclick = showPending; box.append(b);
   }
+  state.view = "report";
   showView(box);
 }
 
@@ -1512,6 +1517,7 @@ async function showPending() {
     const data = await json(await fetch("db/pending"));
     const box = el("div");
     box.append(el("h2", null, "Slične pjesme — koju zadržati?"));
+    state.view = "pending";
     if (!data.items.length) { box.append(el("p", "muted", "Nema ničega za riješiti. ✓")); showView(box); return; }
     box.append(el("p", "muted", "Retci koji se razlikuju su označeni bojom."));
     if (data.items.length > 1) {

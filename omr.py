@@ -15,11 +15,13 @@ slabija za skenove i fotografije — ispravci se rade u MuseScoreu.
 """
 
 import fcntl
+import logging
 import os
 import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -44,6 +46,7 @@ CREATE INDEX IF NOT EXISTS omr_jobs_note ON omr_jobs(note_id);
 """
 # status: queued | running | done | error
 
+log = logging.getLogger("omr")
 _proc_lock = threading.Lock()
 _running = set()                      # baze za koje u ovom procesu radi nit
 
@@ -111,25 +114,68 @@ def kick(db_file):
     threading.Thread(target=_worker, args=(key,), daemon=True, name="omr").start()
 
 
+_resumed = set()
+
+
+def resume(db_file):
+    """Pri pokretanju (prvi zahtjev u procesu): nastavi poslove koji su čekali
+    ili su prekinuti restartom kontejnera."""
+    key = str(db_file)
+    if key in _resumed or not available():
+        return
+    _resumed.add(key)
+    if _pending(key, include_running=True):
+        kick(key)
+
+
+def _pending(db_file, include_running=False):
+    import sqlite3  # noqa: PLC0415
+
+    try:
+        with sqlite3.connect(db_file, timeout=10) as c:
+            states = "('queued','running')" if include_running else "('queued')"
+            return c.execute(f"SELECT 1 FROM omr_jobs WHERE status IN {states} LIMIT 1").fetchone()
+    except sqlite3.Error:
+        return None
+
+
 def _worker(db_file):
     import songdb  # noqa: PLC0415 — izbjegava kružni import
 
-    try:
-        lock_path = Path(db_file).parent / "omr.lock"
-        with open(lock_path, "w") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)       # jedan Audiveris u cijelom kontejneru
-            conn = songdb.connect(db_file)
-            try:
-                while True:
-                    job = _claim(conn)
-                    if job is None:
-                        break
-                    _run(conn, job)
-            finally:
-                conn.close()
-    finally:
+    while True:
+        try:
+            lock_path = Path(db_file).parent / "omr.lock"
+            with open(lock_path, "w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)       # jedan Audiveris u cijelom kontejneru
+                conn = songdb.connect(db_file)
+                try:
+                    # imamo bravu -> nijedan Audiveris sad ne radi: "running" je
+                    # ostao od prekinutog procesa (restart, OOM) -> ispočetka
+                    conn.execute("UPDATE omr_jobs SET status='queued' WHERE status='running'")
+                    while True:
+                        job = _claim(conn)
+                        if job is None:
+                            break
+                        try:
+                            _run(conn, job)
+                        except Exception as exc:  # noqa: BLE001 — posao ne smije srušiti nit
+                            log.exception("OMR posao %s", job["id"])
+                            try:
+                                _finish(conn, job["id"], "error",
+                                        f"Neočekivana greška: {type(exc).__name__}")
+                            except Exception:  # noqa: BLE001
+                                log.exception("OMR: ne mogu zapisati grešku posla")
+                finally:
+                    conn.close()
+        except Exception:  # noqa: BLE001
+            log.exception("OMR nit")
+            time.sleep(5)
+        # posao dodan baš dok je nit završavala: kick() bi ga propustio jer je
+        # nit još bila "živa" — zato provjera pod istom bravom kao kick()
         with _proc_lock:
-            _running.discard(db_file)
+            if not _pending(db_file):
+                _running.discard(db_file)
+                return
 
 
 def _claim(conn):

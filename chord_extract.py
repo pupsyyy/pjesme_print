@@ -187,6 +187,7 @@ def _split_gap(gap, sw, hw, first, spacers):
     """
     if gap <= 0.35 * sw:
         return 0, 0
+    best = None
     for m in range(0, 41 if spacers else 1):
         rest = gap - m * hw
         if rest < -0.03:
@@ -194,8 +195,14 @@ def _split_gap(gap, sw, hw, first, spacers):
         n = round(rest / sw)
         if n < 0 or (n == 0 and m == 0):
             continue
-        if abs(rest - n * sw) < 0.03:
+        err = abs(rest - n * sw)
+        if err < 0.03:
             return n, m
+        if best is None or err < best[0] - 1e-9:
+            best = (err, n, m)
+    # zaokružene/nepreciznije koordinate: najbolji razmještaj ako je dovoljno blizu
+    if best and best[0] < 0.15 * sw:
+        return best[1], best[2]
     n = round(gap / sw)
     return (max(1, n) if not first else n), 0
 

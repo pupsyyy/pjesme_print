@@ -666,6 +666,7 @@ def test_tags_migration_and_suggest_for_old_songs(tmp_path):
     c.execute("DELETE FROM song_tags")
     c.execute("ALTER TABLE songs DROP COLUMN tagged")
     c.close()
+    songdb._READY.clear()                 # nova verzija aplikacije = novi proces
     c = songdb.connect(path)
     assert songdb.suggest_all(c) == (1, 2)                                 # Aleluja + Pričest (izvor)
     sid = songdb.list_songs(c)["items"][0]["id"]

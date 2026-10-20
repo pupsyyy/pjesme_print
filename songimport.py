@@ -21,6 +21,7 @@ Note koje već imamo (isti sadržaj) se ne dodaju ponovo.
 
 import hashlib
 import io
+import logging
 import os
 import posixpath
 import zipfile
@@ -30,6 +31,7 @@ import scorepages
 import songdb
 import songnotes
 
+log = logging.getLogger("songimport")
 MAX_ZIP_FILES = 2000
 MAX_ZIP_TOTAL = 1024 * 1024 * 1024        # raspakirano ukupno (zaštita od "zip bombe")
 MAX_ZIP_ENTRY = 200 * 1024 * 1024
@@ -167,10 +169,15 @@ def import_pdf(conn, name, data, tags=(), folder=None):
                 "Baza prima PDF-ove iz aplikacije za pjesmarice, pjesmarice iz Worda — "
                 "pjesma s naslovom na vrhu stranice, akordi u retku iznad teksta — "
                 "i note (iz programa za note ili skenirane)."}
-    if res["songs"] and not res["titled"] and not groups:
-        return {"file": name, "error": "U PDF-u nisu prepoznate pjesme (nema naslova). "
-                "Baza prima PDF-ove iz aplikacije za pjesmarice i pjesmarice iz Worda — "
-                "pjesma s naslovom na vrhu stranice, akordi u retku iznad teksta."}
+    if res["songs"] and not res["titled"]:
+        if not groups:
+            return {"file": name, "error": "U PDF-u nisu prepoznate pjesme (nema naslova). "
+                    "Baza prima PDF-ove iz aplikacije za pjesmarice i pjesmarice iz Worda — "
+                    "pjesma s naslovom na vrhu stranice, akordi u retku iznad teksta."}
+        # note s tekstom bez prepoznatog naslova (zasluge, list s riječima...):
+        # uvoze se samo note, tekst bez naslova ne postaje "(bez naslova)" pjesma
+        res["warnings"].append("Tekst bez naslova nije uvezen kao pjesma — uvezene su samo note.")
+        res["songs"] = []
     sha = _sha(data)
     rep = songdb.import_songs(conn, res["songs"], name, sha, res["pages"], tags=tags)
     order = rep.pop("order")
@@ -181,8 +188,16 @@ def import_pdf(conn, name, data, tags=(), folder=None):
         folder.songs[sid] = title
         for p in (song.get("source") or {}).get("pages") or []:
             page_song[p] = (sid, title)
-    rep["notes"] = [_place_group(conn, name, data, sha, g, res, page_song, folder, tags)
-                    for g in groups]
+    rep["notes"] = []
+    for g in groups:
+        try:
+            rep["notes"].append(_place_group(conn, name, data, sha, g, res, page_song,
+                                             folder, tags))
+        except Exception:  # noqa: BLE001 — jedan komad nota ne smije srušiti cijeli uvoz
+            log.exception("note iz %s, str. %s", name, g["pages"])
+            rep["notes"].append({"title": g["title"], "pages": g["pages"], "kind": g["kind"],
+                                 "status": "error",
+                                 "error": "Stranice s notama se ne mogu izdvojiti iz PDF-a."})
     rep["warnings"] = res["warnings"]
     rep["pages"] = res["pages"]
     return rep
@@ -223,17 +238,21 @@ def _place_group(conn, name, data, sha, g, res, page_song, folder, tags):
     # ključ za "već imamo": sadržaj stranica, ne bajtovi PDF-a (ponovni izvoz
     # istih nota ima drugi datum/ID, ali iste note)
     key = _sha(("score:" + g["fp"]).encode())
-    if whole:
-        content, fname = data, base
-    else:
-        content = scorepages.extract_pages(data, g["pages"])
-        fname = f"{stem} ({_pages_label(g['pages'])}).pdf"
     out = {"title": g["title"], "pages": g["pages"], "kind": g["kind"]}
     existing = conn.execute("SELECT a.song_id, s.title FROM attachments a JOIN songs s"
                             " ON s.id = a.song_id WHERE a.sha256=?", (key,)).fetchone()
     if existing:
         return out | {"status": "duplicate", "song_id": existing["song_id"],
                       "song_title": existing["title"]}
+    if whole:
+        content, fname = data, base
+    else:
+        content = scorepages.extract_pages(data, g["pages"])
+        fname = f"{stem} ({_pages_label(g['pages'])}).pdf"
+    try:
+        songnotes.check_file(fname, content)     # prije nove pjesme: da ne ostane prazna
+    except songnotes.NoteError as exc:
+        return out | {"status": "error", "error": str(exc)}
     status = "attached"
     if target is None:
         sid = songdb.create_notes_song(conn, new_title, {"file": name, "pages": g["pages"],
