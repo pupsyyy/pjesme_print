@@ -306,3 +306,34 @@ def test_web_setlist_needs_password(client, monkeypatch):
     assert client.post(f"/db/setlists/{sid}/items", json={"song_id": 1}).status_code == 401
     assert client.delete(f"/db/setlists/{sid}").status_code == 401
     assert client.get(f"/p/{sl['setlist']['token']}").status_code == 200    # zbor bez lozinke
+
+
+# ── Spajanje pjesama ──────────────────────────────────────────────────────────
+
+def test_merge_songs(client):
+    import songdb as sdb
+    from test_scores import _score_pdf
+    ids = _songs_for_mass(client)
+    a, z = ids["Aleluja (Bože svet si)"], ids["Zdravo Marijo"]
+    # pjesma samo s notama (duplikat "Aleluje") + snimka + oznaka + popis
+    client.post("/db/import", data={"file": (io.BytesIO(_score_pdf(title="Aleluja note")), "x.pdf")},
+                content_type="multipart/form-data")
+    n = {s["title"]: s for s in client.get("/db/songs").get_json()["items"]}["Aleluja note"]
+    client.post(f"/db/songs/{n['id']}/links", json={"url": "https://youtu.be/dQw4w9WgXcQ", "voice": "Sopran"})
+    client.post(f"/db/songs/{n['id']}/tags", json={"name": "Ulazna"})
+    sl = client.post("/db/setlists", json={"title": "Misa"}).get_json()["setlist"]
+    client.post(f"/db/setlists/{sl['id']}/items", json={"song_id": n["id"], "part": "Ulazna"})
+    r = client.post(f"/db/songs/{a}/merge", json={"other_id": n["id"]}).get_json()
+    s = r["song"]
+    assert s["title"] == "Aleluja (Bože svet si)" and s["has_text"]          # auto: tekst ostaje
+    assert len(s["notes"]) == 1 and s["links"][0]["voice"] == "Sopran"
+    assert "Ulazna" in [t["name"] for t in s["tags"]]
+    assert client.get(f"/db/songs/{n['id']}").status_code == 404
+    assert client.get(f"/db/setlists/{sl['id']}").get_json()["setlist"]["items"][0]["song_id"] == a
+    assert client.get(f"/db/songs/{a}/versions").get_json()["versions"][0]["note"].startswith("prije spajanja")
+    # tekst druge pjesme
+    r = client.post(f"/db/songs/{a}/merge", json={"other_id": z, "text_from": "other"}).get_json()
+    assert r["song"]["title"] == "Zdravo Marijo" and r["song"]["id"] == a
+    assert client.post(f"/db/songs/{a}/merge", json={"other_id": a}).status_code == 400
+    assert client.post(f"/db/songs/{a}/merge", json={"other_id": 999}).status_code == 404
+    assert client.post(f"/db/songs/{a}/merge", json={"other_id": z, "text_from": "x"}).status_code == 400

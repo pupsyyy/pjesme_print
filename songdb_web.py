@@ -427,6 +427,25 @@ def db_song_update(song_id):
     return jsonify(ok=True, changed=bool(changed), song=songdb.get_song(conn, song_id))
 
 
+@bp.post("/db/songs/<int:song_id>/merge")
+def db_song_merge(song_id):
+    """Spoji drugu pjesmu (duplikat) u ovu."""
+    denied = _require_write()
+    if denied:
+        return denied
+    d = request.get_json(silent=True) or {}
+    text_from = d.get("text_from") or "auto"
+    if text_from not in ("auto", "keep", "other"):
+        return jsonify(error="text_from mora biti auto, keep ili other"), 400
+    try:
+        ok = songdb.merge_songs(_conn(), song_id, int(d.get("other_id") or 0), text_from)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    if not ok:
+        return jsonify(error="Pjesma ne postoji."), 404
+    return jsonify(ok=True, song=songdb.get_song(_conn(), song_id))
+
+
 @bp.get("/db/songs/<int:song_id>/versions")
 def db_song_versions(song_id):
     return jsonify(versions=songdb.list_versions(_conn(), song_id))
@@ -1749,7 +1768,10 @@ async function openSong(id, keepScroll) {
     ed.onclick = () => showEditor(id);
     const toSl = el("button", "btn", "📋 U popis za misu");
     toSl.onclick = () => addToSetlist(id, tr);
-    act.append(ed, toSl);
+    const mg = el("button", "btn", "⇄ Spoji s…");
+    mg.title = "Spoji s duplikatom: note, snimke, oznake i popisi prelaze na ovu pjesmu, druga nestaje";
+    mg.onclick = () => pickSong("Spoji s „" + s.title + "” — odaberi duplikat:", id, other => mergeDialog(s, other));
+    act.append(ed, toSl, mg);
     const del = el("button", "btn danger", "Obriši");
     del.onclick = async () => {
       if (!confirm("Obrisati pjesmu \"" + s.title + "\" iz baze?")) return;
@@ -1769,6 +1791,39 @@ async function openSong(id, keepScroll) {
     showView(box, keepScroll);
     if (keepScroll) $("main").scrollTop = top;
   } catch (e) { toast(e.message, true); }
+}
+
+/* ── Spajanje pjesama ── */
+function mergeDialog(s, other) {
+  const modal = el("div", "modal"), win = el("div", "win"); win.style.width = "min(520px, 100%)";
+  const bar = el("div", "bar"); bar.append(el("b", null, "Spoji pjesme"), el("span", "grow"));
+  const close = el("button", "btn", "✕"); close.onclick = () => modal.remove(); bar.append(close);
+  const body = el("div", "body");
+  body.append(el("p", null, "„" + other.title + "” nestaje; njezine note, snimke, oznake, mjesta u popisima " +
+                            "za misu i izvori prelaze na „" + s.title + "”."));
+  body.append(el("p", "muted", "Koji tekst (i naslov) ostaje?"));
+  const opt = (val, label, checked) => {
+    const l = el("label"); l.style.display = "block"; l.style.margin = ".3rem 0";
+    const r = el("input"); r.type = "radio"; r.name = "tf"; r.value = val; r.checked = checked;
+    l.append(r, document.createTextNode(" " + label)); body.append(l); return r;
+  };
+  const keepHas = s.has_text, otherHas = other.has_text !== false;
+  opt("keep", "„" + s.title + "”" + (keepHas ? "" : " (nema teksta)"), keepHas || !otherHas);
+  opt("other", "„" + other.title + "”" + (otherHas ? "" : " (nema teksta)"), !keepHas && otherHas);
+  const ok = el("button", "btn primary", "⇄ Spoji"); ok.style.marginTop = ".6rem";
+  ok.onclick = async () => {
+    const tf = body.querySelector("input[name=tf]:checked").value;
+    try {
+      await json(await api("db/songs/" + s.id + "/merge", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                           body: JSON.stringify({ other_id: other.id, text_from: tf }) }));
+      modal.remove(); toast("Spojeno. Stara verzija je u povijesti pjesme.");
+      state.sel.delete(other.id); state.current = s.id; state.view = "song"; await refreshAll();
+    } catch (e) { toast(e.message, true); }
+  };
+  body.append(ok);
+  win.append(bar, body); modal.append(win);
+  modal.onclick = e => { if (e.target === modal) modal.remove(); };
+  document.body.append(modal);
 }
 
 /* ── Uređivanje pjesme ── */
