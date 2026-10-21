@@ -234,3 +234,21 @@ PR #17 spojen (98ab25b); nova grana od main, PR #18.
       PDF s naslovnicom, tekst za poruku, urednik, javni /p/<token> (mobitel), novi link; Caddy /p/*
 - [x] 110 testova; Playwright: transpozicija, urednik + povijest + vraćanje, popis (prijedlog Pričest,
       tonalitet po stavci), stranica za zbor na mobitelu, backup — bez JS grešaka
+
+---
+# Faza 7 — "radi 5, 6, 7 i 8" (2026-10-21)
+PR #18 spojen (uz commit "Verzija 2026.10.21" od VPS agenta); nova grana od main, PR #20.
+- [x] 8 spajanje pjesama: merge_songs (note, snimke, oznake s user prednošću, stavke popisa, pending,
+      izvori), izbor teksta keep/other/auto, verzija prije spajanja; UI ⇄ Spoji s…
+- [x] 7 ZIP u pozadini: importjobs.py (data/uploads, import_jobs, nit + flock, resume nakon restarta,
+      napredak po datoteci), UI traka napretka + "Uvoz u tijeku" u izborniku
+- [x] 6 tekst iz nota: musicxml.py (score-partwise, .mxl, bez ENTITY), kitice iz lyric/syllabic, akordi iz
+      harmony, retci po frazama; OMR: segmentacija slogova DP-om s rječnikom (baza + PDF nota iste pjesme,
+      dulje poznate riječi prednost), "SUS"→"Isus", "Ije"→"lje". Korisnikov PDF: "Isus najljepše ime,
+      Spasitelj ljudi…", 3 kitice, 33 akorda. Urednik s prijedlogom.
+- [x] 5 vježbanje glasova: musicxml.events (dionice/glasovi, vezane note, tempo), WebAudio u pregledniku
+      nota: svi / samo / naglašeno, tempo, transpozicija; traka napretka
+- [x] 115 testova; Playwright: ZIP napredak, tekst iz nota + spremanje, vježbanje (SOPRANO/ALTO/TENOR/BASS),
+      spajanje — bez JS grešaka
+- transcribe.josip.cloud: redizajn (Claude Design artifact 2026-10-20) već je u repou trasnscribe_cloud
+  (commit 0056487 "Kartica Vjencanja, arhiva na YouTube i redizajn", PR #16/#17 spojeni)

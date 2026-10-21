@@ -138,8 +138,10 @@ def connect(path=None):
         # pisaćom bravom da dva gunicorn workera ne nadograđuju istodobno
         conn.execute("BEGIN IMMEDIATE")
         try:
+            import importjobs  # noqa: PLC0415
             import setlists  # noqa: PLC0415 — setlists uvozi songdb
-            for script in (SCHEMA, songnotes.SCHEMA, songlinks.SCHEMA, omr.SCHEMA, setlists.SCHEMA):
+            for script in (SCHEMA, songnotes.SCHEMA, songlinks.SCHEMA, omr.SCHEMA, setlists.SCHEMA,
+                           importjobs.SCHEMA):
                 for stmt in script.split(";"):
                     if stmt.strip():
                         conn.execute(stmt)
@@ -357,6 +359,52 @@ def restore_version(conn, song_id, version_id):
         return False
     return update_song(conn, song_id, json.loads(r["data"]), "prije vraćanja starije verzije") \
         is not False
+
+
+def merge_songs(conn, keep_id, other_id, text_from="auto"):
+    """Spoji dvije pjesme (duplikat): ostaje keep_id, other_id nestaje.
+
+    Note, snimke, oznake, stavke popisa za misu i izvori prelaze na pjesmu
+    koja ostaje. text_from: "keep" | "other" | "auto" (tekst one koja ga ima;
+    ako ga imaju obje — keep). Stara verzija se čuva (povijest).
+    Vrati False ako neke pjesme nema."""
+    if keep_id == other_id:
+        raise ValueError("Pjesma se ne može spojiti sama sa sobom.")
+    keep = conn.execute("SELECT * FROM songs WHERE id=?", (keep_id,)).fetchone()
+    other = conn.execute("SELECT * FROM songs WHERE id=?", (other_id,)).fetchone()
+    if keep is None or other is None:
+        return False
+    if text_from == "auto":
+        text_from = "other" if not _has_text(keep) and _has_text(other) else "keep"
+    data = json.loads((other if text_from == "other" else keep)["data"])
+    sources = json.loads(keep["sources"])
+    for src in json.loads(other["sources"]):
+        if src not in sources:
+            sources.append(src)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        save_version(conn, keep_id, f"prije spajanja s pjesmom #{other_id} ({other['title']})")
+        conn.execute("UPDATE attachments SET song_id=? WHERE song_id=?", (keep_id, other_id))
+        conn.execute("DELETE FROM song_links WHERE song_id=? AND EXISTS (SELECT 1 FROM song_links k"
+                     " WHERE k.song_id=? AND k.url=song_links.url AND k.voice=song_links.voice)",
+                     (other_id, keep_id))
+        conn.execute("UPDATE song_links SET song_id=? WHERE song_id=?", (keep_id, other_id))
+        conn.execute("INSERT OR IGNORE INTO song_tags (song_id, tag_id, source)"
+                     " SELECT ?, tag_id, source FROM song_tags WHERE song_id=?", (keep_id, other_id))
+        conn.execute("UPDATE song_tags SET source='user' WHERE song_id=? AND tag_id IN"
+                     " (SELECT tag_id FROM song_tags WHERE song_id=? AND source='user')",
+                     (keep_id, other_id))
+        conn.execute("UPDATE setlist_items SET song_id=? WHERE song_id=?", (keep_id, other_id))
+        conn.execute("UPDATE pending SET existing_id=? WHERE existing_id=?", (keep_id, other_id))
+        _replace(conn, keep_id, clean_song(data), None)
+        conn.execute("UPDATE songs SET sources=?, tagged=1 WHERE id=?",
+                     (json.dumps(sources, ensure_ascii=False), keep_id))
+        conn.execute("DELETE FROM songs WHERE id=?", (other_id,))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return True
 
 
 def _add_source(conn, song_id, source):
@@ -1059,4 +1107,5 @@ def stats(conn):
             "imports": one("SELECT COUNT(*) FROM imports"),
             "notes": one("SELECT COUNT(*) FROM attachments"),
             "links": one("SELECT COUNT(*) FROM song_links"),
-            "notes_only": one(f"SELECT COUNT(*) FROM songs WHERE {NOTES_ONLY_SQL}")}
+            "notes_only": one(f"SELECT COUNT(*) FROM songs WHERE {NOTES_ONLY_SQL}"),
+            "importing": one("SELECT COUNT(*) FROM import_jobs WHERE status IN ('queued','running')")}

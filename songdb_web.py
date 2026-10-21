@@ -22,6 +22,8 @@ from flask import (Blueprint, Response, g, jsonify, make_response, request,
 import backup
 import chord_extract
 import chord_render
+import importjobs
+import musicxml
 import omr
 import setlists
 import songdb
@@ -41,6 +43,7 @@ def _conn():
         g.songdb_conn = songdb.connect()
         if g.songdb_conn.db_file:
             omr.resume(g.songdb_conn.db_file)      # poslovi prekinuti restartom
+            importjobs.resume(g.songdb_conn.db_file)
             backup.ensure_daily(g.songdb_conn.db_file)
     return g.songdb_conn
 
@@ -89,10 +92,26 @@ def db_import():
     conn = _conn()
     tags = [songdb.tag_name(conn, t)
             for t in songtags.parse_tag_input(request.form.get("tags", ""))]
-    reports = []
+    reports, jobs = [], []
     for f in files:
-        reports.extend(songimport.import_upload(conn, f.filename or "dokument.pdf", f.read(), tags))
-    return jsonify(reports=reports, tags=tags, stats=songdb.stats(conn))
+        name = os.path.basename(f.filename or "dokument.pdf")
+        data = f.read()
+        if name.lower().endswith(".zip") and conn.db_file and request.form.get("wait") != "1":
+            jobs.append(importjobs.enqueue(conn, name, data, tags))     # ZIP: u pozadini
+        else:
+            reports.extend(songimport.import_upload(conn, name, data, tags))
+    return jsonify(reports=reports, jobs=jobs, tags=tags, stats=songdb.stats(conn))
+
+
+@bp.get("/db/import-jobs")
+def db_import_jobs():
+    return jsonify(jobs=importjobs.active(_conn()))
+
+
+@bp.get("/db/import-jobs/<int:job_id>")
+def db_import_job(job_id):
+    job = importjobs.get(_conn(), job_id)
+    return jsonify(job=job) if job else (jsonify(error="Uvoz ne postoji."), 404)
 
 
 # ── Čitanje (stranica) ────────────────────────────────────────────────────────
@@ -427,6 +446,25 @@ def db_song_update(song_id):
     return jsonify(ok=True, changed=bool(changed), song=songdb.get_song(conn, song_id))
 
 
+@bp.post("/db/songs/<int:song_id>/merge")
+def db_song_merge(song_id):
+    """Spoji drugu pjesmu (duplikat) u ovu."""
+    denied = _require_write()
+    if denied:
+        return denied
+    d = request.get_json(silent=True) or {}
+    text_from = d.get("text_from") or "auto"
+    if text_from not in ("auto", "keep", "other"):
+        return jsonify(error="text_from mora biti auto, keep ili other"), 400
+    try:
+        ok = songdb.merge_songs(_conn(), song_id, int(d.get("other_id") or 0), text_from)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    if not ok:
+        return jsonify(error="Pjesma ne postoji."), 404
+    return jsonify(ok=True, song=songdb.get_song(_conn(), song_id))
+
+
 @bp.get("/db/songs/<int:song_id>/versions")
 def db_song_versions(song_id):
     return jsonify(versions=songdb.list_versions(_conn(), song_id))
@@ -497,6 +535,70 @@ def _note_file(note_id):
 @bp.get("/db/notes/<int:note_id>")
 def db_note_file(note_id):
     return _note_file(note_id)
+
+
+def _musicxml_note(note_id):
+    """(opis, bajtovi) MusicXML note ili odgovor s greškom."""
+    found = songdb.get_note(_conn(), note_id)
+    if found is None or not found[1].exists():
+        return None, (jsonify(error="Note ne postoje."), 404)
+    note, path = found
+    if note["kind"] != "musicxml":
+        return None, (jsonify(error="Ovo radi samo s MusicXML notama (.musicxml/.mxl)."), 400)
+    return (note, path.read_bytes()), None
+
+
+def _vocab(conn, song_id):
+    """Poznate riječi za spajanje slogova: iz svih pjesama u bazi i iz teksta
+    ispod nota u PDF-ovima iste pjesme (ondje su slogovi točno označeni)."""
+    import collections
+
+    import pdfplumber
+    import scorepages
+    vocab = collections.Counter()
+    for (lyr,) in conn.execute("SELECT lyrics FROM songs"):
+        for w in lyr.split():
+            vocab[musicxml._norm_word(w)] += 1
+    for n in songdb.list_notes(conn, song_id):
+        if n["kind"] != "pdf":
+            continue
+        found = songdb.get_note(conn, n["id"])
+        try:
+            with pdfplumber.open(str(found[1])) as doc:
+                for page in doc.pages[:20]:
+                    info = scorepages.classify(page)
+                    for w in scorepages.lyric_words(page, info) if info else []:
+                        vocab[musicxml._norm_word(w)] += 3       # isti izvor vrijedi više
+        except Exception:  # noqa: BLE001 — loš PDF: samo bez tih riječi
+            continue
+    vocab.pop("", None)
+    return vocab
+
+
+@bp.get("/db/notes/<int:note_id>/lyrics")
+def db_note_lyrics(note_id):
+    """Prijedlog teksta (i akorda) pjesme iz MusicXML nota — za urednik."""
+    got, err = _musicxml_note(note_id)
+    if err:
+        return err
+    note, data = got
+    try:
+        res = musicxml.lyrics_text(data, _vocab(_conn(), note["song_id"]))
+    except musicxml.MusicXmlError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(body=res["body"], verses=res["verses"], chords=res["chords"], title=res["title"])
+
+
+@bp.get("/db/notes/<int:note_id>/events")
+def db_note_events(note_id):
+    """Note po dionicama za vježbanje glasova (zvuk u pregledniku)."""
+    got, err = _musicxml_note(note_id)
+    if err:
+        return err
+    try:
+        return jsonify(musicxml.events(got[1]))
+    except musicxml.MusicXmlError as exc:
+        return jsonify(error=str(exc)), 400
 
 
 @bp.patch("/db/notes/<int:note_id>")
@@ -989,6 +1091,11 @@ DB_PAGE = r"""<!doctype html>
   .picklist { list-style: none; margin: .5rem 0 0; padding: 0; max-height: 50vh; overflow-y: auto; }
   .picklist li { padding: .4rem .6rem; border-radius: 8px; cursor: pointer; font-family: var(--ui); font-size: .88rem; }
   .picklist li:hover { background: var(--ring); }
+  #importBar { margin: 0 .8rem .6rem; padding: .5rem .7rem; border-radius: 10px; cursor: pointer;
+               border: 1px solid var(--border); background: var(--panel2); font-family: var(--ui); font-size: .82rem; }
+  .progress { height: .55rem; border-radius: 999px; background: var(--panel2); border: 1px solid var(--border);
+              overflow: hidden; margin: .4rem 0; }
+  .progress > div { height: 100%; background: var(--accent); transition: width .3s; }
   #pendingBar { margin: 0 .8rem .6rem; padding: .55rem .7rem; border-radius: 10px; cursor: pointer;
                 border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel));
                 font-family: var(--ui); font-size: .85rem; }
@@ -1092,6 +1199,7 @@ DB_PAGE = r"""<!doctype html>
       placeholder="Oznake za nove pjesme iz uvoza, npr. #pučkepjesme #velikizbor"
       title="Sve NOVE pjesme iz sljedećeg uvoza dobiju ove oznake (pjesme koje već imamo ne). Oznake zbirki možeš sakriti u popisu (👁)."></div>
     <div id="pendingBar" class="hidden"></div>
+    <div id="importBar" class="hidden"></div>
     <div class="search"><input id="q" type="search" placeholder="Traži naslov, broj, tekst…" autocomplete="off"></div>
     <div class="tagbar" id="tagbar"></div>
     <ul id="list"></ul>
@@ -1371,7 +1479,19 @@ async function refreshStats() {
   const bar = $("pendingBar");
   bar.classList.toggle("hidden", !s.pending);
   bar.textContent = "⚠ " + s.pending + (s.pending === 1 ? " slična pjesma čeka" : " sličnih pjesama čeka") + " tvoju odluku →";
+  const ib = $("importBar");
+  ib.classList.toggle("hidden", !s.importing);
+  if (s.importing) {
+    ib.textContent = "⏳ Uvoz ZIP-a u tijeku… (klikni za napredak)";
+    clearTimeout(ib._t);
+    ib._t = setTimeout(() => { refreshStats(); loadList(); }, 4000);
+  }
 }
+$("importBar").onclick = async () => {
+  try { const d = await json(await fetch("db/import-jobs"));
+        if (d.jobs.length) followImports(d.jobs.map(j => j.id), [], []); }
+  catch (e) { toast(e.message, true); }
+};
 let qTimer = null;
 $("q").addEventListener("input", () => {
   clearTimeout(qTimer);
@@ -1455,8 +1575,11 @@ function renderNotes(s, jobs) {
       card.append(el("div", "st", "⏳ Prepoznajem note… (≈ pola minute po stranici)"));
     else if (job && job.status === "error") card.append(el("div", "st bad", "✕ " + job.message));
     const acts = el("div", "acts");
-    if (viewable) { const v = el("button", "btn", "▶ Prikaži"); v.title = "Note u pregledniku, s transpozicijom";
-                    v.onclick = () => showScore(n, s); acts.append(v); }
+    if (viewable) { const v = el("button", "btn", "▶ Prikaži"); v.title = "Note u pregledniku: transpozicija i vježbanje glasova";
+                    v.onclick = () => showScore(n, s); acts.append(v);
+                    const lt = el("button", "btn", "📝 Tekst iz nota");
+                    lt.title = "Kitice (i akordi) iz teksta ispod nota — otvori se urednik da provjeriš prije spremanja";
+                    lt.onclick = () => lyricsFromNotes(n, s); acts.append(lt); }
     if (n.inline) { const o = el("a", "btn", "Otvori"); o.href = url; o.target = "_blank"; acts.append(o); }
     if (OMR && (n.kind === "pdf" || n.kind === "image") &&
         !(job && (job.status === "queued" || job.status === "running"))) {
@@ -1628,6 +1751,46 @@ function pickSong(title, excludeId, onPick, part) {
   q.focus(); search().catch(e => toast(e.message, true));
 }
 
+/* ── Zvuk iz nota (WebAudio): vježbanje glasova ── */
+function playNotes(ev, opts, onProgress, onEnd) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC();
+  const spb = 60 / (ev.tempo * (opts.tempoPct || 100) / 100);
+  const t0 = ctx.currentTime + 0.2;
+  const master = ctx.createGain(); master.gain.value = 0.22; master.connect(ctx.destination);
+  let end = 0;
+  ev.tracks.forEach((tr, i) => {
+    if (opts.mode === "solo" && i !== opts.track) return;
+    const vol = opts.mode === "emph" ? (i === opts.track ? 1 : 0.22) : 0.8;
+    const type = opts.mode !== "all" && i === opts.track ? "square" : "triangle";
+    tr.notes.forEach(([t, d, m]) => {
+      const start = t0 + t * spb, dur = Math.max(0.06, d * spb);
+      end = Math.max(end, t + d);
+      const o = ctx.createOscillator(); o.type = type;
+      o.frequency.value = 440 * Math.pow(2, (m + (opts.transpose || 0) - 69) / 12);
+      const g = ctx.createGain();
+      const peak = (type === "square" ? 0.35 : 0.6) * vol;
+      g.gain.setValueAtTime(0, start);
+      g.gain.linearRampToValueAtTime(peak, start + 0.02);
+      g.gain.setValueAtTime(peak, start + dur * 0.8);
+      g.gain.linearRampToValueAtTime(0, start + dur * 0.98);
+      o.connect(g); g.connect(master);
+      o.start(start); o.stop(start + dur);
+    });
+  });
+  const total = end * spb;
+  let raf = 0, stopped = false;
+  const tick = () => {
+    if (stopped) return;
+    const frac = Math.min(1, (ctx.currentTime - t0) / (total || 1));
+    onProgress(Math.max(0, frac));
+    if (frac >= 1) { onEnd(); return; }
+    raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+  return { stop() { stopped = true; cancelAnimationFrame(raf); ctx.close(); } };
+}
+
 /* ── Prikaz MusicXML nota (Verovio), transpozicija ── */
 let verovioReady = null;
 function loadVerovio() {
@@ -1666,12 +1829,42 @@ async function showScore(n, s) {
   zoom.value = "40";
   const prev = el("button", "btn", "◀"), next = el("button", "btn", "▶"), info = el("span", "muted");
   const dl = el("a", "btn", "⬇ MusicXML"); dl.href = "db/notes/" + n.id + "?download=1";
-  const close = el("button", "btn", "✕ Zatvori"); close.onclick = () => modal.remove();
+  const close = el("button", "btn", "✕ Zatvori");
   bar.append(el("span", null, "Transpozicija:"), tr, zoom, prev, info, next, dl, close);
+  // vježbanje glasova: zvuk iz nota (svi / samo jedan / jedan naglašen)
+  const pbar = el("div", "bar");
+  const voice = el("select"); voice.title = "Koji glas";
+  voice.append(new Option("🎧 Svi glasovi", "all"));
+  const tempo = el("select"); tempo.title = "Tempo";
+  [["50", "50 %"], ["75", "75 %"], ["100", "100 % tempa"], ["125", "125 %"]].forEach(([v, t]) => tempo.append(new Option(t, v)));
+  tempo.value = "100";
+  const play = el("button", "btn primary", "▶ Sviraj");
+  const prog = el("div", "progress"); prog.style.flex = "1"; prog.style.minWidth = "6rem";
+  const fill = el("div"); fill.style.width = "0%"; prog.append(fill);
+  pbar.append(el("span", null, "Vježbanje:"), voice, tempo, play, prog);
+  let ev = null, player = null;
+  fetch("db/notes/" + n.id + "/events").then(r => r.json()).then(d => {
+    if (!d.tracks) { pbar.classList.add("hidden"); return; }
+    ev = d;
+    d.tracks.forEach((t, i) => {
+      voice.append(new Option("samo " + t.name, "solo:" + i));
+      voice.append(new Option(t.name + " naglašeno", "emph:" + i));
+    });
+  }).catch(() => pbar.classList.add("hidden"));
+  const stopPlay = () => { if (player) { player.stop(); player = null; } play.textContent = "▶ Sviraj"; fill.style.width = "0%"; };
+  play.onclick = () => {
+    if (player) { stopPlay(); return; }
+    if (!ev) { toast("Note se još učitavaju…"); return; }
+    const [mode, idx] = voice.value.split(":");
+    player = playNotes(ev, { mode, track: Number(idx), tempoPct: Number(tempo.value), transpose: Number(tr.value) },
+                       frac => { fill.style.width = Math.round(frac * 100) + "%"; }, stopPlay);
+    play.textContent = "■ Stani";
+  };
+  close.onclick = () => { stopPlay(); modal.remove(); };
   const body = el("div", "body"), score = el("div", "score");
   body.append(score);
-  win.append(bar, body); modal.append(win);
-  modal.onclick = e => { if (e.target === modal) modal.remove(); };
+  win.append(bar, pbar, body); modal.append(win);
+  modal.onclick = e => { if (e.target === modal) { stopPlay(); modal.remove(); } };
   document.body.append(modal);
   let page = 1, pages = 1;
   const isZip = new Uint8Array(buf.slice(0, 2))[0] === 0x50;
@@ -1749,7 +1942,10 @@ async function openSong(id, keepScroll) {
     ed.onclick = () => showEditor(id);
     const toSl = el("button", "btn", "📋 U popis za misu");
     toSl.onclick = () => addToSetlist(id, tr);
-    act.append(ed, toSl);
+    const mg = el("button", "btn", "⇄ Spoji s…");
+    mg.title = "Spoji s duplikatom: note, snimke, oznake i popisi prelaze na ovu pjesmu, druga nestaje";
+    mg.onclick = () => pickSong("Spoji s „" + s.title + "” — odaberi duplikat:", id, other => mergeDialog(s, other));
+    act.append(ed, toSl, mg);
     const del = el("button", "btn danger", "Obriši");
     del.onclick = async () => {
       if (!confirm("Obrisati pjesmu \"" + s.title + "\" iz baze?")) return;
@@ -1771,17 +1967,66 @@ async function openSong(id, keepScroll) {
   } catch (e) { toast(e.message, true); }
 }
 
+/* ── Tekst pjesme iz nota (MusicXML) ── */
+async function lyricsFromNotes(n, s) {
+  if (s.has_text && !confirm("Pjesma već ima tekst. Otvoriti urednik s tekstom iz nota umjesto postojećeg? " +
+                             "(ništa se ne mijenja dok ne spremiš; stari tekst ostaje u povijesti)")) return;
+  busy("Čitam tekst iz nota…");
+  try {
+    const r = await json(await fetch("db/notes/" + n.id + "/lyrics"));
+    busy(null);
+    showEditor(s.id, { body: r.body, info: "Prijedlog iz nota „" + n.name + "”: " + r.verses +
+      (r.verses === 1 ? " kitica" : " kitice") + ", " + r.chords + " akorda. Provjeri tekst " +
+      "(kod prepoznatih nota zna biti krivo pročitanih slova ili slogova) pa spremi." });
+  } catch (e) { busy(null); toast(e.message, true); }
+}
+
+/* ── Spajanje pjesama ── */
+function mergeDialog(s, other) {
+  const modal = el("div", "modal"), win = el("div", "win"); win.style.width = "min(520px, 100%)";
+  const bar = el("div", "bar"); bar.append(el("b", null, "Spoji pjesme"), el("span", "grow"));
+  const close = el("button", "btn", "✕"); close.onclick = () => modal.remove(); bar.append(close);
+  const body = el("div", "body");
+  body.append(el("p", null, "„" + other.title + "” nestaje; njezine note, snimke, oznake, mjesta u popisima " +
+                            "za misu i izvori prelaze na „" + s.title + "”."));
+  body.append(el("p", "muted", "Koji tekst (i naslov) ostaje?"));
+  const opt = (val, label, checked) => {
+    const l = el("label"); l.style.display = "block"; l.style.margin = ".3rem 0";
+    const r = el("input"); r.type = "radio"; r.name = "tf"; r.value = val; r.checked = checked;
+    l.append(r, document.createTextNode(" " + label)); body.append(l); return r;
+  };
+  const keepHas = s.has_text, otherHas = other.has_text !== false;
+  opt("keep", "„" + s.title + "”" + (keepHas ? "" : " (nema teksta)"), keepHas || !otherHas);
+  opt("other", "„" + other.title + "”" + (otherHas ? "" : " (nema teksta)"), !keepHas && otherHas);
+  const ok = el("button", "btn primary", "⇄ Spoji"); ok.style.marginTop = ".6rem";
+  ok.onclick = async () => {
+    const tf = body.querySelector("input[name=tf]:checked").value;
+    try {
+      await json(await api("db/songs/" + s.id + "/merge", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                           body: JSON.stringify({ other_id: other.id, text_from: tf }) }));
+      modal.remove(); toast("Spojeno. Stara verzija je u povijesti pjesme.");
+      state.sel.delete(other.id); state.current = s.id; state.view = "song"; await refreshAll();
+    } catch (e) { toast(e.message, true); }
+  };
+  body.append(ok);
+  win.append(bar, body); modal.append(win);
+  modal.onclick = e => { if (e.target === modal) modal.remove(); };
+  document.body.append(modal);
+}
+
 /* ── Uređivanje pjesme ── */
-async function showEditor(id) {
+async function showEditor(id, prefill) {
   let f;
   try { f = await json(await fetch("db/songs/" + id + "/edit")); }
   catch (e) { toast(e.message, true); return; }
+  if (prefill && prefill.body) f.body = prefill.body;
   const box = el("div");
   const head = el("div", "song-head");
   head.append(el("h2", null, "Uređivanje: " + f.title), el("span", "grow"));
   const hist = el("button", "btn", "🕘 Povijest"); hist.onclick = () => showVersions(id);
   head.append(hist);
   box.append(head);
+  if (prefill && prefill.info) box.append(el("div", "info", prefill.info));
   const wrap = el("div", "editor");
   const left = el("div"), right = el("div", "prev");
   const fields = el("div", "fields");
@@ -2103,22 +2348,62 @@ async function importFiles(files) {
   files = files.filter(f => IMPORT_EXT.some(x => f.name.toLowerCase().endsWith(x)));
   if (!files.length) { toast("Odaberi PDF, ZIP ili datoteke nota.", true); return; }
   const tags = $("importTags").value.trim();
-  const reports = [];
+  const reports = [], jobs = [];
   let usedTags = [];
   try {
     for (let i = 0; i < files.length; i++) {
       const zip = files[i].name.toLowerCase().endsWith(".zip");
-      busy("Uvozim " + (i + 1) + "/" + files.length + ": " + files[i].name +
-           (zip ? " (ZIP s puno datoteka može potrajati par minuta)" : ""));
+      busy((zip ? "Šaljem " : "Uvozim ") + (i + 1) + "/" + files.length + ": " + files[i].name);
       const fd = new FormData(); fd.append("file", files[i]); fd.append("tags", tags);
       try {
         const data = await json(await api("db/import", { method: "POST", body: fd }));
-        reports.push(...data.reports); usedTags = data.tags || usedTags;
+        reports.push(...data.reports); jobs.push(...(data.jobs || [])); usedTags = data.tags || usedTags;
       } catch (e) { reports.push({ file: files[i].name, error: e.message }); }
     }
   } finally { busy(null); }
+  if (jobs.length) { await followImports(jobs.map(j => j.id), reports, usedTags); return; }
   await Promise.all([loadList(), refreshStats(), loadTags()]);
   showReport(reports, usedTags);
+}
+
+/* ZIP se uvozi u pozadini: prikaz napretka dok ne završi (stranica se smije i zatvoriti) */
+async function followImports(ids, reports, tags) {
+  const box = el("div");
+  box.append(el("h2", null, "Uvoz u tijeku…"));
+  box.append(el("p", "muted", "ZIP se uvozi na serveru. Možeš raditi i drugo ili zatvoriti stranicu — uvoz se nastavlja."));
+  const rows = {};
+  ids.forEach(id => {
+    const c = el("div", "card"); const h = el("h3", null, "…"); const bar = el("div", "progress");
+    const fill = el("div"); fill.style.width = "0%"; bar.append(fill); const st = el("div", "muted");
+    c.append(h, bar, st); box.append(c); rows[id] = { h, fill, st };
+  });
+  state.view = "import";
+  showView(box);
+  const done = {};
+  while (Object.keys(done).length < ids.length) {
+    for (const id of ids) {
+      if (done[id]) continue;
+      try {
+        const j = (await json(await fetch("db/import-jobs/" + id))).job;
+        const r = rows[id]; r.h.textContent = j.filename;
+        const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
+        r.fill.style.width = pct + "%";
+        r.st.textContent = j.status === "queued" ? "čeka…" :
+          (j.done + "/" + (j.total || "?") + (j.current ? " · " + j.current : ""));
+        if (j.status === "done" || j.status === "error") {
+          done[id] = j;
+          if (j.status === "error") reports.push({ file: j.filename, error: j.message });
+          else reports.push(...j.reports);
+        }
+      } catch (e) { done[id] = { error: e.message }; reports.push({ file: "ZIP", error: e.message }); }
+    }
+    if (Object.keys(done).length < ids.length) await new Promise(res => setTimeout(res, 1500));
+    if (state.view !== "import") {           // korisnik je otišao drugdje: traka u izborniku prati dalje
+      refreshStats(); return;
+    }
+  }
+  await Promise.all([loadList(), refreshStats(), loadTags()]);
+  showReport(reports, tags);
 }
 const NOTE_STATUS = { attached: "uz pjesmu", new_song: "nova pjesma (zasad samo note)",
                       duplicate: "već imamo (preskočeno)", error: "greška" };

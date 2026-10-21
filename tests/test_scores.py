@@ -328,7 +328,13 @@ def test_web_links_import_zip_move_and_exclude(client):
     rep = _post_file(client, _zipfile({"a/aleluja.pdf": chord_render.render_pdf([_song_v2()]),
                                        "b/Nešto drugo.pdf": _score_pdf(title="Nešto drugo")}),
                      "paket.zip", "#velikizbor").get_json()
-    assert rep["tags"] == ["Veliki zbor"] and rep["stats"]["notes_only"] == 1
+    # ZIP se uvozi u pozadini: odgovor odmah, napredak preko /db/import-jobs
+    assert rep["tags"] == ["Veliki zbor"] and rep["jobs"][0]["status"] in ("queued", "running", "done")
+    job = _wait_import(client, rep["jobs"][0]["id"])
+    assert job["status"] == "done" and job["done"] == job["total"] == 2
+    assert [r["file"] for r in job["reports"]] == ["paket.zip/a/aleluja.pdf", "paket.zip/b/Nešto drugo.pdf"]
+    assert client.get("/db/stats").get_json()["notes_only"] == 1
+    assert client.get("/db/import-jobs").get_json()["jobs"] == []
     songs = {s["title"]: s for s in client.get("/db/songs").get_json()["items"]}
     sid, other = songs["Aleluja (Bože svet si)"]["id"], songs["Nešto drugo"]["id"]
     assert not songs["Nešto drugo"]["has_text"] and songs["Nešto drugo"]["notes_count"] == 1
@@ -360,6 +366,15 @@ def test_web_links_import_zip_move_and_exclude(client):
     assert client.get(f"/db/songs/{sid}/omr").get_json() == {"available": False, "jobs": []}
     page = client.get("/baza").data
     assert b"const OMR = false" in page and b'"Sopran"' in page and b".zip" in page
+
+
+def _wait_import(client, job_id):
+    for _ in range(200):
+        job = client.get(f"/db/import-jobs/{job_id}").get_json()["job"]
+        if job["status"] in ("done", "error"):
+            return job
+        time.sleep(0.05)
+    return job
 
 
 def json_export(client):
