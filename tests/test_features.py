@@ -87,3 +87,62 @@ def test_web_transpose(client):
     ed = client.post("/db/to-editor", json={"ids": [sid], "transpose": {str(sid): 2}}).get_json()
     assert ed["songs"][0]["key"] == "Key: A"
     assert client.get(f"/db/songs/{sid}?transpose=x").get_json()["transpose"] == 0
+
+
+# ── Uređivanje pjesme ─────────────────────────────────────────────────────────
+
+def test_edit_text_roundtrip_is_identical():
+    import songedit
+    from test_songdb import _song_v1
+    for song in (_song_v2(), _song_v1()):
+        body, meta = songedit.to_text(song)
+        assert songedit.apply(song, song["title"], song["subtitle"], song["key"], body, meta) == song
+
+
+def test_edit_parse_sections_chords_and_compound():
+    import songedit
+    secs = songedit.parse_text("[Refren]\n  G     DG\nSlava Tebi\n\nC  a\n\nAHE  7\nSveti, sveti\n"
+                               "Kitica 2\nobičan redak\n")
+    assert secs[0] == {"label": "Refren", "lines": [{"text": "Slava Tebi", "chords": [[2, "G"], [8, "DG"]]}]}
+    assert secs[1]["lines"] == [{"text": "", "chords": [[0, "C"], [3, "a"]]}]
+    assert secs[2]["lines"] == [{"text": "Sveti, sveti", "chords": [[0, "AHE"], [5, "7"]]}]
+    assert secs[3] == {"label": "Kitica 2", "lines": [{"text": "običan redak", "chords": []}]}
+    with pytest.raises(songedit.EditError):
+        songedit.apply(_song_v2(), "  ", "", "", "x", "")
+
+
+def test_web_edit_versions_restore(client):
+    _upload(client, chord_render.render_pdf([_song_v2()]))
+    sid = client.get("/db/songs").get_json()["items"][0]["id"]
+    f = client.get(f"/db/songs/{sid}/edit").get_json()
+    assert f["title"] == "Aleluja (Bože svet si)" and f["meta"] == "Pjesmarica: 203"
+    assert "[Verse 1]" in f["body"] and "     G          C\nBože svet si aleluja," in f["body"]
+    before = client.get(f"/db/songs/{sid}").get_json()
+    same = client.put(f"/db/songs/{sid}", json=f).get_json()
+    assert same["ok"] and not same["changed"]
+    body = f["body"].replace("Bože svet si aleluja,", "Bože, svet si, aleluja!")
+    r = client.put(f"/db/songs/{sid}", json=dict(f, title="Aleluja", key="A", body=body))
+    s = r.get_json()["song"]
+    assert r.get_json()["changed"] and s["title"] == "Aleluja" and s["key"] == "A"
+    assert s["sections"][0]["lines"][0]["text"] == "Bože, svet si, aleluja!"
+    assert s["sections"][1:] == before["sections"][1:]          # ostalo netaknuto (i fmt)
+    assert client.get("/db/songs?q=bože svet si").get_json()["total"] == 1   # pretraga po novom tekstu
+    prev = client.post(f"/db/songs/{sid}/preview", json={"body": "G\nx"}).get_json()
+    assert prev["sections"][0]["lines"] == [{"text": "x", "chords": [[0, "G"]]}]
+    vers = client.get(f"/db/songs/{sid}/versions").get_json()["versions"]
+    assert len(vers) == 1 and vers[0]["title"] == "Aleluja (Bože svet si)"
+    assert client.post(f"/db/songs/{sid}/versions/{vers[0]['id']}/restore").get_json()["ok"]
+    assert client.get(f"/db/songs/{sid}").get_json()["title"] == "Aleluja (Bože svet si)"
+    assert len(client.get(f"/db/songs/{sid}/versions").get_json()["versions"]) == 2
+    assert client.put(f"/db/songs/{sid}", json=dict(f, title="")).status_code == 400
+    assert client.put("/db/songs/999", json=f).status_code == 404
+
+
+def test_web_edit_needs_password(client, monkeypatch):
+    monkeypatch.setenv("DB_PASSWORD", "tajna")
+    client.post("/db/import", data={"file": (io.BytesIO(chord_render.render_pdf([_song_v2()])), "a.pdf")},
+                content_type="multipart/form-data", headers={"X-DB-Password": "tajna"})
+    sid = client.get("/db/songs").get_json()["items"][0]["id"]
+    f = client.get(f"/db/songs/{sid}/edit").get_json()
+    assert client.put(f"/db/songs/{sid}", json=f).status_code == 401
+    assert client.post(f"/db/songs/{sid}/versions/1/restore").status_code == 401

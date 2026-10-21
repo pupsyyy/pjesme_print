@@ -83,6 +83,15 @@ CREATE TABLE IF NOT EXISTS song_tags (
 );
 CREATE INDEX IF NOT EXISTS song_tags_tag ON song_tags(tag_id);
 
+CREATE TABLE IF NOT EXISTS song_versions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    song_id     INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
+    data        TEXT NOT NULL,
+    note        TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS song_versions_song ON song_versions(song_id);
+
 CREATE TABLE IF NOT EXISTS imports (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     filename    TEXT NOT NULL,
@@ -289,6 +298,64 @@ def _replace(conn, song_id, song, source):
          json.dumps(song, ensure_ascii=False), d["lyrics"], d["norm_lyrics"],
          d["search"], fingerprint(song), json.dumps(sources, ensure_ascii=False),
          _now(), song_id))
+
+
+# ── Uređivanje i verzije ──────────────────────────────────────────────────────
+
+KEEP_VERSIONS = 30            # po pjesmi
+
+
+def save_version(conn, song_id, note=""):
+    """Spremi trenutni sadržaj pjesme kao verziju (za vraćanje)."""
+    row = conn.execute("SELECT data FROM songs WHERE id=?", (song_id,)).fetchone()
+    if row is None:
+        return None
+    vid = conn.execute("INSERT INTO song_versions (song_id, data, note, created_at) VALUES (?,?,?,?)",
+                       (song_id, row["data"], note[:100], _now())).lastrowid
+    conn.execute("DELETE FROM song_versions WHERE song_id=? AND id NOT IN (SELECT id FROM"
+                 " song_versions WHERE song_id=? ORDER BY id DESC LIMIT ?)",
+                 (song_id, song_id, KEEP_VERSIONS))
+    return vid
+
+
+def update_song(conn, song_id, song, note="uređeno"):
+    """Spremi uređenu pjesmu (isti id, note/snimke/oznake ostaju). Stara verzija
+    se čuva. Vrati False ako pjesme nema, None ako se ništa nije promijenilo."""
+    row = conn.execute("SELECT data FROM songs WHERE id=?", (song_id,)).fetchone()
+    if row is None:
+        return False
+    song = clean_song(song)
+    if json.loads(row["data"]) == song:
+        return None
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        save_version(conn, song_id, note)
+        _replace(conn, song_id, song, None)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return True
+
+
+def list_versions(conn, song_id):
+    out = []
+    for r in conn.execute("SELECT id, data, note, created_at FROM song_versions WHERE song_id=?"
+                          " ORDER BY id DESC", (song_id,)):
+        d = json.loads(r["data"])
+        out.append({"id": r["id"], "note": r["note"], "created_at": r["created_at"],
+                    "title": d.get("title") or "", "key": d.get("key") or "",
+                    "lines": sum(len(sec.get("lines") or []) for sec in d.get("sections") or [])})
+    return out
+
+
+def restore_version(conn, song_id, version_id):
+    r = conn.execute("SELECT data FROM song_versions WHERE id=? AND song_id=?",
+                     (version_id, song_id)).fetchone()
+    if r is None:
+        return False
+    return update_song(conn, song_id, json.loads(r["data"]), "prije vraćanja starije verzije") \
+        is not False
 
 
 def _add_source(conn, song_id, source):
@@ -961,6 +1028,7 @@ def resolve(conn, pending_id, action):
             _add_source(conn, p["existing_id"], source)
             result = p["existing_id"]
         elif action == "replace":
+            save_version(conn, p["existing_id"], "prije zamjene novom verzijom")
             _replace(conn, p["existing_id"], song, source)
             result = p["existing_id"]
         else:

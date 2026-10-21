@@ -771,8 +771,8 @@ def line_to_text_rows(ln):
     if chords:
         s = ""
         for i, ch in chords:
-            if len(s) > i:
-                i = len(s) + 1 if s else i
+            if s and len(s) >= i:
+                i = len(s) + 1            # akordi se ne smiju slijepiti ("A(D", "Fm#E")
             s += " " * (i - len(s)) + ch
         rows.append(s.rstrip())
     if ln["text"].strip():

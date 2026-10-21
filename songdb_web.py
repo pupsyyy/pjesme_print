@@ -23,6 +23,7 @@ import chord_extract
 import chord_render
 import omr
 import songdb
+import songedit
 import songimport
 import songlinks
 import songnotes
@@ -177,6 +178,60 @@ def _tr():
 def db_song(song_id):
     s = songdb.get_song(_conn(), song_id, _tr())
     return jsonify(s) if s else (jsonify(error="Pjesma ne postoji."), 404)
+
+
+# ── Uređivanje pjesme ─────────────────────────────────────────────────────────
+
+@bp.get("/db/songs/<int:song_id>/edit")
+def db_song_edit_form(song_id):
+    data = songdb.song_data(_conn(), song_id)
+    if data is None:
+        return jsonify(error="Pjesma ne postoji."), 404
+    body, meta = songedit.to_text(data)
+    return jsonify(title=data.get("title") or "", subtitle=data.get("subtitle") or "",
+                   key=data.get("key") or "", body=body, meta=meta)
+
+
+@bp.post("/db/songs/<int:song_id>/preview")
+def db_song_edit_preview(song_id):
+    d = request.get_json(silent=True) or {}
+    try:
+        return jsonify(sections=songedit.parse_text(str(d.get("body") or "")))
+    except songedit.EditError as exc:
+        return jsonify(error=str(exc)), 400
+
+
+@bp.put("/db/songs/<int:song_id>")
+def db_song_update(song_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    d = request.get_json(silent=True) or {}
+    conn = _conn()
+    old = songdb.song_data(conn, song_id)
+    if old is None:
+        return jsonify(error="Pjesma ne postoji."), 404
+    try:
+        new = songedit.apply(old, d.get("title"), d.get("subtitle"), d.get("key"),
+                             str(d.get("body") or ""), str(d.get("meta") or ""))
+    except songedit.EditError as exc:
+        return jsonify(error=str(exc)), 400
+    changed = songdb.update_song(conn, song_id, new)
+    return jsonify(ok=True, changed=bool(changed), song=songdb.get_song(conn, song_id))
+
+
+@bp.get("/db/songs/<int:song_id>/versions")
+def db_song_versions(song_id):
+    return jsonify(versions=songdb.list_versions(_conn(), song_id))
+
+
+@bp.post("/db/songs/<int:song_id>/versions/<int:version_id>/restore")
+def db_song_restore(song_id, version_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    ok = songdb.restore_version(_conn(), song_id, version_id)
+    return jsonify(ok=True) if ok else (jsonify(error="Verzija ne postoji."), 404)
 
 
 @bp.delete("/db/songs/<int:song_id>")
@@ -652,6 +707,24 @@ DB_PAGE = r"""<!doctype html>
   .imptags input { width: 100%; background: var(--panel2); border: 1px solid var(--border);
                    border-radius: 10px; padding: .4rem .7rem; font-size: .8rem; }
   .imptags input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+  .editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
+  .editor .fields { display: grid; grid-template-columns: 1fr 1fr 8rem; gap: .5rem; margin-bottom: .6rem; }
+  .editor label { font-family: var(--ui); font-size: .75rem; color: var(--muted); display: flex;
+                  flex-direction: column; gap: .2rem; }
+  .editor input, .editor textarea { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+                  padding: .4rem .55rem; color: var(--text); font-size: .9rem; }
+  .editor textarea { font-family: ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+                     font-size: 14px; line-height: 1.35; width: 100%; resize: vertical; white-space: pre;
+                     overflow-wrap: normal; overflow-x: auto; tab-size: 4; }
+  .editor input:focus, .editor textarea:focus { outline: none; border-color: var(--accent);
+                     box-shadow: 0 0 0 3px var(--ring); }
+  .editor .help { font-size: .78rem; color: var(--muted); margin: .4rem 0; }
+  .editor .help code { background: var(--panel2); border-radius: 4px; padding: 0 .25rem; }
+  .editor .prev { border: 1px solid var(--border); border-radius: 12px; padding: .7rem .9rem;
+                  background: var(--panel); min-width: 0; }
+  .versions li { display: flex; gap: .6rem; align-items: center; padding: .25rem 0; font-family: var(--ui);
+                 font-size: .84rem; }
+  @media (max-width: 1000px) { .editor { grid-template-columns: 1fr; } .editor .fields { grid-template-columns: 1fr; } }
   .trchip { display: inline-flex; align-items: center; gap: .3rem; color: var(--text); }
   .trchip select { background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
                    padding: .05rem .4rem; font-size: .78rem; font-family: var(--ui); color: var(--text); }
@@ -1437,6 +1510,9 @@ async function openSong(id, keepScroll) {
     const a1 = el("a", "btn", "⬇ PDF (izvorni izgled)" + (tr ? " · " + s.key : "")); a1.href = "db/songs/" + id + "/pdf" + q;
     const a2 = el("a", "btn", "⬇ ChordPro"); a2.href = "db/songs/" + id + "/chordpro" + q;
     const a3 = el("a", "btn", "JSON"); a3.href = "db/songs/" + id; a3.target = "_blank";
+    const ed = el("button", "btn primary", "✎ Uredi"); ed.title = "Uredi naslov, tekst i akorde";
+    ed.onclick = () => showEditor(id);
+    act.append(ed);
     const del = el("button", "btn danger", "Obriši");
     del.onclick = async () => {
       if (!confirm("Obrisati pjesmu \"" + s.title + "\" iz baze?")) return;
@@ -1455,6 +1531,95 @@ async function openSong(id, keepScroll) {
     state.view = "song";
     showView(box, keepScroll);
     if (keepScroll) $("main").scrollTop = top;
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ── Uređivanje pjesme ── */
+async function showEditor(id) {
+  let f;
+  try { f = await json(await fetch("db/songs/" + id + "/edit")); }
+  catch (e) { toast(e.message, true); return; }
+  const box = el("div");
+  const head = el("div", "song-head");
+  head.append(el("h2", null, "Uređivanje: " + f.title), el("span", "grow"));
+  const hist = el("button", "btn", "🕘 Povijest"); hist.onclick = () => showVersions(id);
+  head.append(hist);
+  box.append(head);
+  const wrap = el("div", "editor");
+  const left = el("div"), right = el("div", "prev");
+  const fields = el("div", "fields");
+  const inp = (label, value) => { const l = el("label", null, label); const i = el("input"); i.value = value || "";
+                                  l.append(i); fields.append(l); return i; };
+  const title = inp("Naslov", f.title), sub = inp("Podnaslov (izvođač…)", f.subtitle), key = inp("Tonalitet", f.key);
+  left.append(fields);
+  const body = el("textarea"); body.rows = 26; body.value = f.body; body.spellcheck = false;
+  left.append(body);
+  const help = el("div", "help");
+  help.innerHTML = "Akordi u retku <b>iznad</b> teksta (stupac = slovo ispod). " +
+    "<code>[Refren]</code> u svom retku = nova sekcija, prazan redak = nova sekcija bez oznake. " +
+    "Redak samo s akordima bez teksta ispod = međuigra/uvod. Nepromijenjeni retci ostaju točno kakvi su bili.";
+  left.append(help);
+  const ml = el("label", null, "Metapodaci (po retku, npr. Pjesmarica: 203)");
+  const meta = el("textarea"); meta.rows = 3; meta.value = f.meta; meta.spellcheck = false; ml.append(meta);
+  left.append(ml);
+  const act = el("div", "actions");
+  const save = el("button", "btn primary", "💾 Spremi"), cancel = el("button", "btn", "Odustani");
+  cancel.onclick = () => openSong(id);
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      const r = await json(await api("db/songs/" + id, { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title.value, subtitle: sub.value, key: key.value, body: body.value, meta: meta.value }) }));
+      toast(r.changed ? "Spremljeno (stara verzija je u povijesti)." : "Nema promjena.");
+      state.view = "song"; await refreshAll(); openSong(id);
+    } catch (e) { toast(e.message, true); } finally { save.disabled = false; }
+  };
+  act.append(save, cancel);
+  left.append(act);
+  right.append(el("div", "muted", "Pregled"));
+  const prevBox = el("div"); right.append(prevBox);
+  let t = null;
+  const preview = async () => {
+    try {
+      const r = await json(await fetch("db/songs/" + id + "/preview", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: body.value }) }));
+      prevBox.innerHTML = "";
+      prevBox.append(renderSheet({ sections: r.sections, meta: [] }));
+      fixHyphens(prevBox);
+    } catch (e) { prevBox.textContent = e.message; }
+  };
+  body.oninput = () => { clearTimeout(t); t = setTimeout(preview, 350); };
+  wrap.append(left, right); box.append(wrap);
+  state.view = "edit";
+  showView(box);
+  preview();
+}
+async function showVersions(id) {
+  try {
+    const d = await json(await fetch("db/songs/" + id + "/versions"));
+    const box = el("div");
+    box.append(el("h2", null, "Povijest pjesme"));
+    if (!d.versions.length) box.append(el("p", "muted", "Nema starijih verzija — pjesma još nije uređivana."));
+    const ul = el("ul", "versions");
+    d.versions.forEach(v => {
+      const li = el("li");
+      li.append(el("span", null, new Date(v.created_at).toLocaleString("hr-HR")),
+                el("span", "muted", v.title + (v.key ? " · " + v.key : "") + " · " + v.lines + " redaka · " + v.note),
+                el("span", "grow"));
+      const b = el("button", "btn", "↶ Vrati ovu");
+      b.onclick = async () => {
+        if (!confirm("Vratiti pjesmu na verziju od " + new Date(v.created_at).toLocaleString("hr-HR") + "? (trenutna ide u povijest)")) return;
+        try { await json(await api("db/songs/" + id + "/versions/" + v.id + "/restore", { method: "POST" }));
+              toast("Vraćeno."); state.view = "song"; await refreshAll(); openSong(id); }
+        catch (e) { toast(e.message, true); }
+      };
+      li.append(b); ul.append(li);
+    });
+    box.append(ul);
+    const back = el("button", "btn", "← Natrag na pjesmu"); back.onclick = () => openSong(id);
+    box.append(back);
+    state.view = "versions";
+    showView(box);
   } catch (e) { toast(e.message, true); }
 }
 
