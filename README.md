@@ -147,6 +147,23 @@ popisa: **PDF** (naslovnica s popisom + pjesme s akordima), **📋 Kopiraj popis
 s akordima, snimke, note), „↻ Novi link" poništi stari — i „Napravi pjesmaricu".
 Pjesma se u popis dodaje i s pjesme („📋 U popis za misu").
 
+**Spajanje pjesama** — „⇄ Spoji s…" na pjesmi: duplikat nestaje, a njegove note,
+snimke, oznake, mjesta u popisima za misu i izvori prelaze na ovu pjesmu; biraš
+čiji tekst i naslov ostaje (stara verzija ide u povijest).
+
+**Tekst iz nota** — na MusicXML notama (iz MuseScorea ili prepoznate s
+„🔍 Prepoznaj") gumb „📝 Tekst iz nota" složi kitice iz teksta ispod nota i akorde
+iz oznaka akorda i otvori urednik s tim prijedlogom (ništa se ne sprema dok ne
+klikneš Spremi). Kod prepoznatih nota slogovi se spajaju pomoću riječi iz baze i iz
+PDF-a nota iste pjesme (npr. „I SUS naj Ije pše" → „Isus najljepše").
+
+**Vježbanje glasova** — u pregledniku nota („▶ Prikaži"): „Vježbanje" svira sve
+glasove, samo jedan (npr. samo alt) ili jedan naglašeno uz ostale tiho, tempo
+50–125 %, u odabranoj transpoziciji. Zvuk nastaje u pregledniku (bez interneta).
+
+**Veliki ZIP** se uvozi u pozadini: stranica prikazuje napredak (npr. 12/80 i
+trenutnu datoteku), može se i zatvoriti — uvoz se nastavlja (i nakon restarta).
+
 **Backup** — automatski jednom dnevno (baza + note) u `data/backup/`, čuva se
 zadnjih 14 (`BACKUP_KEEP`); „💾 Backup": popis, „Napravi sada" i preuzimanje ZIP-a
 (uz lozinku baze) za spremanje izvan servera. Vraćanje: DEPLOY.md.

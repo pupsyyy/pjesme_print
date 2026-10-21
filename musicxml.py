@@ -259,7 +259,8 @@ def _segment(syls, vocab):
                           and all(k == "middle" for k in kinds[1:-1]))
             sc = 2.0 if consistent else 0.0
             if cnt:
-                sc += 2.0 * len(word) + min(cnt, 5) * 0.2      # poznata riječ: jak dokaz
+                # poznata riječ: jak dokaz; dulja vrijedi više ("ime" > "i" + "me")
+                sc += 2.0 * len(word) ** 1.5 + min(cnt, 5) * 0.2
             elif j - i > 1 and not consistent:
                 sc -= 1.5 * (j - i)                            # nepoznato i protiv oznaka
             if best[i] + sc > best[j]:
