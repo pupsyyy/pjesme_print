@@ -25,6 +25,7 @@ import omr
 import songlinks
 import songnotes
 import songtags
+import transpose
 
 SIMILARITY_THRESHOLD = 0.80   # tekst ≥ 80 % sličan (drukčiji naslov) -> pitaj
 SAME_RATIO = 0.95             # tekst ≥ 95 % isti -> već imamo
@@ -457,11 +458,14 @@ def _song_title(conn, song_id):
     return row["title"] if row else ""
 
 
-def _row_to_song(row, full=True, tags=None, notes=None):
+def _row_to_song(row, full=True, tags=None, notes=None, transpose_by=0):
     data = json.loads(row["data"])
+    if transpose_by:
+        data = transpose.transpose_song(data, transpose_by)
     out = {
         "id": row["id"], "title": row["title"], "subtitle": row["subtitle"],
-        "key": row["song_key"], "numbers": json.loads(row["numbers"]),
+        "key": data.get("key", row["song_key"]) if transpose_by else row["song_key"],
+        "numbers": json.loads(row["numbers"]),
         "tags": tags if tags is not None else [],
         "created_at": row["created_at"], "updated_at": row["updated_at"],
     }
@@ -477,20 +481,28 @@ def _row_to_song(row, full=True, tags=None, notes=None):
     return out
 
 
-def get_song(conn, song_id):
+def get_song(conn, song_id, transpose_by=0):
+    """Cijela pjesma; transpose_by = transpozicija akorda i tonaliteta (polutonovi)."""
     row = conn.execute("SELECT * FROM songs WHERE id=?", (song_id,)).fetchone()
     if row is None:
         return None
-    out = _row_to_song(row, tags=song_tags(conn, song_id), notes=list_notes(conn, song_id))
+    out = _row_to_song(row, tags=song_tags(conn, song_id), notes=list_notes(conn, song_id),
+                       transpose_by=transpose_by)
     out["links"] = list_links(conn, song_id)
     out["has_text"] = _has_text(row)
+    out["transpose"] = transpose.normalize(transpose_by)
+    out["transpose_options"] = transpose.options(json.loads(row["data"])) \
+        if _has_text(row) else []
     return out
 
 
-def song_data(conn, song_id):
+def song_data(conn, song_id, transpose_by=0):
     """Pjesma u obliku za chord_render (s izvornim profilom izgleda)."""
     row = conn.execute("SELECT data FROM songs WHERE id=?", (song_id,)).fetchone()
-    return json.loads(row["data"]) if row else None
+    if row is None:
+        return None
+    data = json.loads(row["data"])
+    return transpose.transpose_song(data, transpose_by) if transpose_by else data
 
 
 def list_songs(conn, q="", limit=50, offset=0, tag=None, exclude=()):

@@ -27,6 +27,7 @@ import songimport
 import songlinks
 import songnotes
 import songtags
+import transpose
 
 bp = Blueprint("songdb", __name__)
 
@@ -167,9 +168,14 @@ def db_song_tag_remove(song_id, name):
     return jsonify(tags=songdb.song_tags(_conn(), song_id))
 
 
+def _tr():
+    """?transpose=n (polutonovi) na pjesmi, PDF-u, ChordPro i API-ju."""
+    return transpose.normalize(request.args.get("transpose"))
+
+
 @bp.get("/db/songs/<int:song_id>")
 def db_song(song_id):
-    s = songdb.get_song(_conn(), song_id)
+    s = songdb.get_song(_conn(), song_id, _tr())
     return jsonify(s) if s else (jsonify(error="Pjesma ne postoji."), 404)
 
 
@@ -361,10 +367,11 @@ def db_resolve(pending_id):
 
 def _song_pdf(song_id, inline):
     conn = _conn()
-    data = songdb.song_data(conn, song_id)
+    data = songdb.song_data(conn, song_id, _tr())
     if data is None:
         return jsonify(error="Pjesma ne postoji."), 404
-    return _pdf_response(chord_render.render_pdf([data]), _ascii_name(data["title"]), inline)
+    name = _ascii_name(data["title"]) + (f"_{data['key']}" if _tr() and data.get("key") else "")
+    return _pdf_response(chord_render.render_pdf([data]), _ascii_name(name), inline)
 
 
 @bp.get("/db/songs/<int:song_id>/pdf")
@@ -373,7 +380,7 @@ def db_song_pdf(song_id):
 
 
 def _chordpro_response(song_id):
-    data = songdb.song_data(_conn(), song_id)
+    data = songdb.song_data(_conn(), song_id, _tr())
     if data is None:
         return jsonify(error="Pjesma ne postoji."), 404
     resp = make_response(chord_extract.to_chordpro(data))
@@ -391,9 +398,12 @@ def db_song_chordpro(song_id):
 @bp.post("/db/pdf")
 def db_many_pdf():
     """Više pjesama u jednom PDF-u (izvorni izgled, redom kako su poslane)."""
-    ids = (request.get_json(silent=True) or {}).get("ids") or []
+    body = request.get_json(silent=True) or {}
+    ids = body.get("ids") or []
+    tr = body.get("transpose") or {}             # {"id": n} po pjesmi (neobavezno)
     conn = _conn()
-    songs = [s for s in (songdb.song_data(conn, int(i)) for i in ids[:500]) if s]
+    songs = [s for s in (songdb.song_data(conn, int(i), transpose.normalize(tr.get(str(i))))
+                         for i in ids[:500]) if s]
     if not songs:
         return jsonify(error="Nijedna pjesma nije odabrana."), 400
     return _pdf_response(chord_render.render_pdf(songs), "pjesme_iz_baze")
@@ -418,9 +428,12 @@ def song_to_editor(song):
 
 @bp.post("/db/to-editor")
 def db_to_editor():
-    ids = (request.get_json(silent=True) or {}).get("ids") or []
+    body = request.get_json(silent=True) or {}
+    ids = body.get("ids") or []
+    tr = body.get("transpose") or {}
     conn = _conn()
-    out = [song_to_editor(s) for s in (songdb.song_data(conn, int(i)) for i in ids[:500]) if s]
+    out = [song_to_editor(s) for s in (songdb.song_data(conn, int(i), transpose.normalize(tr.get(str(i))))
+                                       for i in ids[:500]) if s]
     return jsonify(songs=out)
 
 
@@ -639,6 +652,9 @@ DB_PAGE = r"""<!doctype html>
   .imptags input { width: 100%; background: var(--panel2); border: 1px solid var(--border);
                    border-radius: 10px; padding: .4rem .7rem; font-size: .8rem; }
   .imptags input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+  .trchip { display: inline-flex; align-items: center; gap: .3rem; color: var(--text); }
+  .trchip select { background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
+                   padding: .05rem .4rem; font-size: .78rem; font-family: var(--ui); color: var(--text); }
   .badge { font-family: var(--ui); font-size: .66rem; border-radius: 999px; padding: 0 .4rem;
            border: 1px dashed var(--border); color: var(--muted); margin-left: .3rem; white-space: nowrap; }
   .note .st { font-family: var(--ui); font-size: .72rem; color: var(--accent); }
@@ -819,7 +835,7 @@ DB_PAGE = r"""<!doctype html>
 "use strict";
 const $ = id => document.getElementById(id);
 const state = { songs: [], total: 0, sel: new Set(), current: null, q: "", tag: "", tags: [], untagged: 0,
-                hidden: new Set() };
+                hidden: new Set(), tr: {}, view: "" };
 const PW_KEY = "pjesme-dbpw", DRAFT_KEY = "pjesme-draft", HIDDEN_KEY = "pjesme-hidden-tags";
 const OMR = __OMR__, VOICES = __VOICES__;
 const VEROVIO_URL = "__VEROVIO_URL__";
@@ -1384,7 +1400,8 @@ $("noteInput").onchange = async () => {
 };
 async function openSong(id, keepScroll) {
   try {
-    const s = await json(await fetch("db/songs/" + id));
+    const tr = state.tr[id] || 0, q = tr ? "?transpose=" + tr : "";
+    const s = await json(await fetch("db/songs/" + id + q));
     state.current = id; renderList();
     const box = el("div");
     const head = el("div", "song-head");
@@ -1392,7 +1409,15 @@ async function openSong(id, keepScroll) {
     h.append(el("h2", null, s.title));
     if (s.subtitle) h.append(el("div", "sub", s.subtitle));
     head.append(h, el("span", "grow"));
-    if (s.key) head.append(el("span", "chip", "Key: " + s.key));
+    if ((s.transpose_options || []).length) {
+      const sel = el("select", "trsel"); sel.title = "Transponiraj akorde (prikaz, PDF, ChordPro)";
+      s.transpose_options.forEach(o => sel.append(new Option(
+        (o.n === 0 ? "Izvorno" : (o.n > 0 ? "+" : "") + o.n) + (o.key ? " · " + o.key : ""), String(o.n))));
+      sel.value = String(tr);
+      sel.onchange = () => { state.tr[id] = Number(sel.value); openSong(id, true); };
+      const lab = el("label", "chip trchip"); lab.append(document.createTextNode("🎚 Tonalitet "), sel);
+      head.append(lab);
+    } else if (s.key) head.append(el("span", "chip", "Key: " + s.key));
     if ((s.numbers || []).length) head.append(el("span", "chip", "Pjesmarica " + s.numbers.join(", ")));
     head.append(el("span", "chip", "#" + s.id));
     box.append(head);
@@ -1409,8 +1434,8 @@ async function openSong(id, keepScroll) {
     if (jobs.some(j => j.status === "queued" || j.status === "running"))
       omrTimer = setTimeout(() => { if (state.current === id) refreshAll(); }, 5000);
     const act = el("div", "actions");
-    const a1 = el("a", "btn", "⬇ PDF (izvorni izgled)"); a1.href = "db/songs/" + id + "/pdf";
-    const a2 = el("a", "btn", "⬇ ChordPro"); a2.href = "db/songs/" + id + "/chordpro";
+    const a1 = el("a", "btn", "⬇ PDF (izvorni izgled)" + (tr ? " · " + s.key : "")); a1.href = "db/songs/" + id + "/pdf" + q;
+    const a2 = el("a", "btn", "⬇ ChordPro"); a2.href = "db/songs/" + id + "/chordpro" + q;
     const a3 = el("a", "btn", "JSON"); a3.href = "db/songs/" + id; a3.target = "_blank";
     const del = el("button", "btn danger", "Obriši");
     del.onclick = async () => {
@@ -1576,7 +1601,7 @@ $("btnSelPdf").onclick = async () => {
   busy("Pripremam PDF…");
   try {
     const res = await fetch("db/pdf", { method: "POST", headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({ ids: selectedIds() }) });
+                                        body: JSON.stringify({ ids: selectedIds(), transpose: state.tr }) });
     if (!res.ok) await json(res);
     const a = document.createElement("a"); a.href = URL.createObjectURL(await res.blob());
     a.download = "pjesme_iz_baze.pdf"; a.click(); URL.revokeObjectURL(a.href);
@@ -1588,7 +1613,7 @@ $("btnSelEditor").onclick = async () => {
     if (old && old.songs && old.songs.length &&
         !confirm("U uredniku već postoji započeta pjesmarica (" + old.songs.length + " pjesama). Zamijeniti je odabranim pjesmama iz baze?")) return;
     const data = await json(await fetch("db/to-editor", { method: "POST", headers: { "Content-Type": "application/json" },
-                                                          body: JSON.stringify({ ids: selectedIds() }) }));
+                                                          body: JSON.stringify({ ids: selectedIds(), transpose: state.tr }) }));
     localStorage.setItem(DRAFT_KEY, JSON.stringify({ filename: "pjesmarica_iz_baze",
       songs: data.songs.map(s => ({ ...s, include: true })), sel: 0, savedAt: Date.now() }));
     location.href = "./#nastavi";
