@@ -252,3 +252,10 @@ PR #18 spojen (uz commit "Verzija 2026.10.21" od VPS agenta); nova grana od main
       spajanje — bez JS grešaka
 - transcribe.josip.cloud: redizajn (Claude Design artifact 2026-10-20) već je u repou trasnscribe_cloud
   (commit 0056487 "Kartica Vjencanja, arhiva na YouTube i redizajn", PR #16/#17 spojeni)
+
+---
+# Faza 8 — "idemo sve redom" (2026-10-21)
+PR #20 spojen (0bf8658). Stavka 9: stranica baze razdvojena iz songdb_web.py (2543 → 908 redaka):
+templates/baza.html (HTML + postavke sa servera: OMR, VOICES, VEROVIO_URL, NOTE_ACCEPT),
+static/baza.css, static/baza.js (?v=VERSION za osvježavanje predmemorije). Dockerfile kopira templates/.
+115 testova, Playwright bez grešaka.
