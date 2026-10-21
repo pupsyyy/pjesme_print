@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py VERSION ./
 COPY assets/ ./assets/
 COPY static/ ./static/
+COPY templates/ ./templates/
 
 # Preglednik nota (MusicXML -> slika, transpozicija) — Verovio, LGPL; poslužuje
 # ga aplikacija sama (bez CDN-a). Ako preuzimanje ne uspije, stranica koristi CDN.
