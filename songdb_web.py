@@ -22,6 +22,7 @@ from flask import (Blueprint, Response, g, jsonify, make_response, request,
 import backup
 import chord_extract
 import chord_render
+import importjobs
 import omr
 import setlists
 import songdb
@@ -41,6 +42,7 @@ def _conn():
         g.songdb_conn = songdb.connect()
         if g.songdb_conn.db_file:
             omr.resume(g.songdb_conn.db_file)      # poslovi prekinuti restartom
+            importjobs.resume(g.songdb_conn.db_file)
             backup.ensure_daily(g.songdb_conn.db_file)
     return g.songdb_conn
 
@@ -89,10 +91,26 @@ def db_import():
     conn = _conn()
     tags = [songdb.tag_name(conn, t)
             for t in songtags.parse_tag_input(request.form.get("tags", ""))]
-    reports = []
+    reports, jobs = [], []
     for f in files:
-        reports.extend(songimport.import_upload(conn, f.filename or "dokument.pdf", f.read(), tags))
-    return jsonify(reports=reports, tags=tags, stats=songdb.stats(conn))
+        name = os.path.basename(f.filename or "dokument.pdf")
+        data = f.read()
+        if name.lower().endswith(".zip") and conn.db_file and request.form.get("wait") != "1":
+            jobs.append(importjobs.enqueue(conn, name, data, tags))     # ZIP: u pozadini
+        else:
+            reports.extend(songimport.import_upload(conn, name, data, tags))
+    return jsonify(reports=reports, jobs=jobs, tags=tags, stats=songdb.stats(conn))
+
+
+@bp.get("/db/import-jobs")
+def db_import_jobs():
+    return jsonify(jobs=importjobs.active(_conn()))
+
+
+@bp.get("/db/import-jobs/<int:job_id>")
+def db_import_job(job_id):
+    job = importjobs.get(_conn(), job_id)
+    return jsonify(job=job) if job else (jsonify(error="Uvoz ne postoji."), 404)
 
 
 # ── Čitanje (stranica) ────────────────────────────────────────────────────────
@@ -1008,6 +1026,11 @@ DB_PAGE = r"""<!doctype html>
   .picklist { list-style: none; margin: .5rem 0 0; padding: 0; max-height: 50vh; overflow-y: auto; }
   .picklist li { padding: .4rem .6rem; border-radius: 8px; cursor: pointer; font-family: var(--ui); font-size: .88rem; }
   .picklist li:hover { background: var(--ring); }
+  #importBar { margin: 0 .8rem .6rem; padding: .5rem .7rem; border-radius: 10px; cursor: pointer;
+               border: 1px solid var(--border); background: var(--panel2); font-family: var(--ui); font-size: .82rem; }
+  .progress { height: .55rem; border-radius: 999px; background: var(--panel2); border: 1px solid var(--border);
+              overflow: hidden; margin: .4rem 0; }
+  .progress > div { height: 100%; background: var(--accent); transition: width .3s; }
   #pendingBar { margin: 0 .8rem .6rem; padding: .55rem .7rem; border-radius: 10px; cursor: pointer;
                 border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel));
                 font-family: var(--ui); font-size: .85rem; }
@@ -1111,6 +1134,7 @@ DB_PAGE = r"""<!doctype html>
       placeholder="Oznake za nove pjesme iz uvoza, npr. #pučkepjesme #velikizbor"
       title="Sve NOVE pjesme iz sljedećeg uvoza dobiju ove oznake (pjesme koje već imamo ne). Oznake zbirki možeš sakriti u popisu (👁)."></div>
     <div id="pendingBar" class="hidden"></div>
+    <div id="importBar" class="hidden"></div>
     <div class="search"><input id="q" type="search" placeholder="Traži naslov, broj, tekst…" autocomplete="off"></div>
     <div class="tagbar" id="tagbar"></div>
     <ul id="list"></ul>
@@ -1390,7 +1414,19 @@ async function refreshStats() {
   const bar = $("pendingBar");
   bar.classList.toggle("hidden", !s.pending);
   bar.textContent = "⚠ " + s.pending + (s.pending === 1 ? " slična pjesma čeka" : " sličnih pjesama čeka") + " tvoju odluku →";
+  const ib = $("importBar");
+  ib.classList.toggle("hidden", !s.importing);
+  if (s.importing) {
+    ib.textContent = "⏳ Uvoz ZIP-a u tijeku… (klikni za napredak)";
+    clearTimeout(ib._t);
+    ib._t = setTimeout(() => { refreshStats(); loadList(); }, 4000);
+  }
 }
+$("importBar").onclick = async () => {
+  try { const d = await json(await fetch("db/import-jobs"));
+        if (d.jobs.length) followImports(d.jobs.map(j => j.id), [], []); }
+  catch (e) { toast(e.message, true); }
+};
 let qTimer = null;
 $("q").addEventListener("input", () => {
   clearTimeout(qTimer);
@@ -2158,22 +2194,62 @@ async function importFiles(files) {
   files = files.filter(f => IMPORT_EXT.some(x => f.name.toLowerCase().endsWith(x)));
   if (!files.length) { toast("Odaberi PDF, ZIP ili datoteke nota.", true); return; }
   const tags = $("importTags").value.trim();
-  const reports = [];
+  const reports = [], jobs = [];
   let usedTags = [];
   try {
     for (let i = 0; i < files.length; i++) {
       const zip = files[i].name.toLowerCase().endsWith(".zip");
-      busy("Uvozim " + (i + 1) + "/" + files.length + ": " + files[i].name +
-           (zip ? " (ZIP s puno datoteka može potrajati par minuta)" : ""));
+      busy((zip ? "Šaljem " : "Uvozim ") + (i + 1) + "/" + files.length + ": " + files[i].name);
       const fd = new FormData(); fd.append("file", files[i]); fd.append("tags", tags);
       try {
         const data = await json(await api("db/import", { method: "POST", body: fd }));
-        reports.push(...data.reports); usedTags = data.tags || usedTags;
+        reports.push(...data.reports); jobs.push(...(data.jobs || [])); usedTags = data.tags || usedTags;
       } catch (e) { reports.push({ file: files[i].name, error: e.message }); }
     }
   } finally { busy(null); }
+  if (jobs.length) { await followImports(jobs.map(j => j.id), reports, usedTags); return; }
   await Promise.all([loadList(), refreshStats(), loadTags()]);
   showReport(reports, usedTags);
+}
+
+/* ZIP se uvozi u pozadini: prikaz napretka dok ne završi (stranica se smije i zatvoriti) */
+async function followImports(ids, reports, tags) {
+  const box = el("div");
+  box.append(el("h2", null, "Uvoz u tijeku…"));
+  box.append(el("p", "muted", "ZIP se uvozi na serveru. Možeš raditi i drugo ili zatvoriti stranicu — uvoz se nastavlja."));
+  const rows = {};
+  ids.forEach(id => {
+    const c = el("div", "card"); const h = el("h3", null, "…"); const bar = el("div", "progress");
+    const fill = el("div"); fill.style.width = "0%"; bar.append(fill); const st = el("div", "muted");
+    c.append(h, bar, st); box.append(c); rows[id] = { h, fill, st };
+  });
+  state.view = "import";
+  showView(box);
+  const done = {};
+  while (Object.keys(done).length < ids.length) {
+    for (const id of ids) {
+      if (done[id]) continue;
+      try {
+        const j = (await json(await fetch("db/import-jobs/" + id))).job;
+        const r = rows[id]; r.h.textContent = j.filename;
+        const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
+        r.fill.style.width = pct + "%";
+        r.st.textContent = j.status === "queued" ? "čeka…" :
+          (j.done + "/" + (j.total || "?") + (j.current ? " · " + j.current : ""));
+        if (j.status === "done" || j.status === "error") {
+          done[id] = j;
+          if (j.status === "error") reports.push({ file: j.filename, error: j.message });
+          else reports.push(...j.reports);
+        }
+      } catch (e) { done[id] = { error: e.message }; reports.push({ file: "ZIP", error: e.message }); }
+    }
+    if (Object.keys(done).length < ids.length) await new Promise(res => setTimeout(res, 1500));
+    if (state.view !== "import") {           // korisnik je otišao drugdje: traka u izborniku prati dalje
+      refreshStats(); return;
+    }
+  }
+  await Promise.all([loadList(), refreshStats(), loadTags()]);
+  showReport(reports, tags);
 }
 const NOTE_STATUS = { attached: "uz pjesmu", new_song: "nova pjesma (zasad samo note)",
                       duplicate: "već imamo (preskočeno)", error: "greška" };

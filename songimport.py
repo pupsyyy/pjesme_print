@@ -82,7 +82,8 @@ def import_upload(conn, filename, data, tags=()):
     return [{"file": name, "error": "Nije PDF, ZIP ni datoteka nota."}]
 
 
-def import_zip(conn, name, data, tags=()):
+def import_zip(conn, name, data, tags=(), progress=None):
+    """ZIP -> izvještaji; progress(gotovo, ukupno, trenutna datoteka) za napredak."""
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile:
@@ -114,6 +115,8 @@ def import_zip(conn, name, data, tags=()):
     if not folders:
         return [{"file": name, "error": "U ZIP-u nema PDF-ova ni datoteka nota."}]
     reports = []
+    count = sum(len(v) for v in folders.values())
+    done = 0
     for dirname in sorted(folders):
         folder = _Folder(dirname)
         entries = folders[dirname]
@@ -121,6 +124,9 @@ def import_zip(conn, name, data, tags=()):
         others = [i for i in entries if i not in pdfs]
         for info in pdfs + others:          # prvo tekst (PDF), pa note iz iste mape
             shown = f"{name}/{info.filename}"
+            if progress:
+                progress(done, count, info.filename)
+            done += 1
             try:
                 content = _read_limited(zf, info)
             except (zipfile.BadZipFile, ValueError, RuntimeError, OSError):
@@ -133,6 +139,8 @@ def import_zip(conn, name, data, tags=()):
                 reports.append(import_pdf(conn, shown, content, tags, folder))
             else:
                 reports.append(import_note_file(conn, shown, content, tags, folder))
+    if progress:
+        progress(count, count, "")
     if skipped:
         reports.append({"file": name, "warnings": [
             "Preskočeno (nije PDF ni note): " + ", ".join(skipped[:20])

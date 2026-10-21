@@ -337,3 +337,55 @@ def test_merge_songs(client):
     assert client.post(f"/db/songs/{a}/merge", json={"other_id": a}).status_code == 400
     assert client.post(f"/db/songs/{a}/merge", json={"other_id": 999}).status_code == 404
     assert client.post(f"/db/songs/{a}/merge", json={"other_id": z, "text_from": "x"}).status_code == 400
+
+
+# ── Uvoz ZIP-a u pozadini ─────────────────────────────────────────────────────
+
+def _zip_of(entries):
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for n, d in entries.items():
+            z.writestr(n, d)
+    return buf.getvalue()
+
+
+def _wait_job(conn, jid):
+    import time
+    import importjobs
+    for _ in range(200):
+        j = importjobs.get(conn, jid)
+        if j["status"] in ("done", "error"):
+            return j
+        time.sleep(0.05)
+    return j
+
+
+def test_import_job_progress_resume_and_cleanup(tmp_path):
+    import json as _json
+    import importjobs
+    conn = songdb.connect(tmp_path / "pjesme.db")
+    calls = []
+    import songimport
+    rep = songimport.import_zip(conn, "a.zip", _zip_of({"x/a.pdf": chord_render.render_pdf([_song_v2()])}),
+                                progress=lambda d, t, c: calls.append((d, t, c)))
+    assert calls[0] == (0, 1, "x/a.pdf") and calls[-1] == (1, 1, "") and rep[0]["added"]
+    # posao "prekinut" restartom: running bez niti -> resume ga dovrši
+    data = _zip_of({"b.pdf": chord_render.render_pdf([dict(_song_v2(), title="Druga",
+        sections=[{"label": None, "lines": [{"text": "posve drukčiji tekst druge pjesme", "chords": []}]}])])})
+    d = importjobs.uploads_dir(conn.db_file)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "x.zip").write_bytes(data)
+    jid = conn.execute("INSERT INTO import_jobs (filename, stored, status, created_at) VALUES"
+                       " ('b.zip', 'x.zip', 'running', 'x')").lastrowid
+    importjobs._resumed.discard(str(conn.db_file))
+    importjobs.resume(conn.db_file)
+    job = _wait_job(conn, jid)
+    assert job["status"] == "done" and job["reports"][0]["added"][0]["title"] == "Druga"
+    assert not (d / "x.zip").exists()                              # ZIP obrisan nakon uvoza
+    # oštećen ZIP: izvještaj s greškom, ne pad
+    job = importjobs.enqueue(conn, "lose.zip", b"PK nije zip")
+    job = _wait_job(conn, job["id"])
+    assert job["status"] == "done" and "ne može otvoriti" in job["reports"][0]["error"]
+    assert importjobs.active(conn) == []
+    assert _json.loads(conn.execute("SELECT tags FROM import_jobs WHERE id=?", (jid,)).fetchone()[0]) == []

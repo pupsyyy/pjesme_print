@@ -138,8 +138,10 @@ def connect(path=None):
         # pisaćom bravom da dva gunicorn workera ne nadograđuju istodobno
         conn.execute("BEGIN IMMEDIATE")
         try:
+            import importjobs  # noqa: PLC0415
             import setlists  # noqa: PLC0415 — setlists uvozi songdb
-            for script in (SCHEMA, songnotes.SCHEMA, songlinks.SCHEMA, omr.SCHEMA, setlists.SCHEMA):
+            for script in (SCHEMA, songnotes.SCHEMA, songlinks.SCHEMA, omr.SCHEMA, setlists.SCHEMA,
+                           importjobs.SCHEMA):
                 for stmt in script.split(";"):
                     if stmt.strip():
                         conn.execute(stmt)
@@ -1105,4 +1107,5 @@ def stats(conn):
             "imports": one("SELECT COUNT(*) FROM imports"),
             "notes": one("SELECT COUNT(*) FROM attachments"),
             "links": one("SELECT COUNT(*) FROM song_links"),
-            "notes_only": one(f"SELECT COUNT(*) FROM songs WHERE {NOTES_ONLY_SQL}")}
+            "notes_only": one(f"SELECT COUNT(*) FROM songs WHERE {NOTES_ONLY_SQL}"),
+            "importing": one("SELECT COUNT(*) FROM import_jobs WHERE status IN ('queued','running')")}
