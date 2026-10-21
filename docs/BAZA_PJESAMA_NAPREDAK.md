@@ -248,7 +248,7 @@ PR #18 spojen (uz commit "Verzija 2026.10.21" od VPS agenta); nova grana od main
       Spasitelj ljudi…", 3 kitice, 33 akorda. Urednik s prijedlogom.
 - [x] 5 vježbanje glasova: musicxml.events (dionice/glasovi, vezane note, tempo), WebAudio u pregledniku
       nota: svi / samo / naglašeno, tempo, transpozicija; traka napretka
-- [x] 118 testova; Playwright: ZIP napredak, tekst iz nota + spremanje, vježbanje (SOPRANO/ALTO/TENOR/BASS),
+- [x] 115 testova; Playwright: ZIP napredak, tekst iz nota + spremanje, vježbanje (SOPRANO/ALTO/TENOR/BASS),
       spajanje — bez JS grešaka
 - transcribe.josip.cloud: redizajn (Claude Design artifact 2026-10-20) već je u repou trasnscribe_cloud
   (commit 0056487 "Kartica Vjencanja, arhiva na YouTube i redizajn", PR #16/#17 spojeni)
