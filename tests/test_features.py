@@ -146,3 +146,77 @@ def test_web_edit_needs_password(client, monkeypatch):
     f = client.get(f"/db/songs/{sid}/edit").get_json()
     assert client.put(f"/db/songs/{sid}", json=f).status_code == 401
     assert client.post(f"/db/songs/{sid}/versions/1/restore").status_code == 401
+
+
+# ── Backup ────────────────────────────────────────────────────────────────────
+
+def test_backup_make_list_prune_zip(tmp_path, monkeypatch):
+    import zipfile
+    import backup
+    import songimport
+    monkeypatch.setenv("BACKUP_KEEP", "2")
+    db = tmp_path / "data" / "pjesme.db"
+    conn = songdb.connect(db)
+    songdb.import_songs(conn, [_song_v2()], "a.pdf")
+    sid = songdb.list_songs(conn)["items"][0]["id"]
+    songdb.add_note(conn, sid, "n.png", _png())
+    b1 = backup.make_backup(db, "ručno")
+    assert b1["songs"] == 1 and b1["notes"] == 1
+    path = tmp_path / "data" / "backup" / b1["name"]
+    note = next((path / "note").iterdir())
+    orig = tmp_path / "data" / "note" / note.name
+    assert note.stat().st_ino == orig.stat().st_ino            # tvrda poveznica, bez kopije
+    # izmjena nakon backupa ne dira backup
+    conn.execute("DELETE FROM songs")
+    import sqlite3
+    assert sqlite3.connect(path / "pjesme.db").execute("SELECT COUNT(*) FROM songs").fetchone()[0] == 1
+    import time
+    for _ in range(2):
+        time.sleep(1.1)
+        backup.make_backup(db)
+    names = [b["name"] for b in backup.list_backups(db)]
+    assert len(names) == 2 and b1["name"] not in names           # čuva zadnja 2
+    z = backup.zip_path(db, names[0])
+    with zipfile.ZipFile(z) as f:
+        assert any(n.endswith("pjesme.db") for n in f.namelist())
+    assert backup.zip_path(db, "../x") is None and backup.zip_path(db, "nema") is None
+
+
+def test_backup_daily_runs_once(tmp_path, monkeypatch):
+    import time
+    import backup
+    monkeypatch.delenv("BACKUP_DISABLE")
+    db = tmp_path / "pjesme.db"
+    songdb.connect(db).close()
+    backup._last_check.clear()
+    backup.ensure_daily(db)
+    for _ in range(50):
+        if backup.list_backups(db):
+            break
+        time.sleep(0.1)
+    assert len(backup.list_backups(db)) == 1
+    backup._last_check.clear()
+    backup.ensure_daily(db)
+    time.sleep(0.3)
+    assert len(backup.list_backups(db)) == 1                       # danas već postoji
+
+
+def test_web_backup(client, monkeypatch):
+    _upload(client, chord_render.render_pdf([_song_v2()]))
+    r = client.post("/db/backups").get_json()["backup"]
+    assert r["songs"] == 1
+    lst = client.get("/db/backups").get_json()
+    assert lst["backups"][0]["name"] == r["name"] and lst["keep"] == 14
+    z = client.get(f"/db/backups/{r['name']}.zip")
+    assert z.status_code == 200 and z.data[:2] == b"PK"
+    assert client.get("/db/backups/nema.zip").status_code == 404
+    monkeypatch.setenv("DB_PASSWORD", "tajna")
+    assert client.get(f"/db/backups/{r['name']}.zip").status_code == 401
+    assert client.post("/db/backups").status_code == 401
+
+
+def _png():
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (10, 10), "white").save(buf, "PNG")
+    return buf.getvalue()

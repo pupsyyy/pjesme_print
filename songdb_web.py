@@ -19,6 +19,7 @@ import unicodedata
 from flask import (Blueprint, Response, g, jsonify, make_response, request,
                    send_file)
 
+import backup
 import chord_extract
 import chord_render
 import omr
@@ -39,6 +40,7 @@ def _conn():
         g.songdb_conn = songdb.connect()
         if g.songdb_conn.db_file:
             omr.resume(g.songdb_conn.db_file)      # poslovi prekinuti restartom
+            backup.ensure_daily(g.songdb_conn.db_file)
     return g.songdb_conn
 
 
@@ -178,6 +180,43 @@ def _tr():
 def db_song(song_id):
     s = songdb.get_song(_conn(), song_id, _tr())
     return jsonify(s) if s else (jsonify(error="Pjesma ne postoji."), 404)
+
+
+# ── Backup ────────────────────────────────────────────────────────────────────
+
+@bp.get("/db/backups")
+def db_backups():
+    conn = _conn()
+    if not conn.db_file:
+        return jsonify(backups=[], keep=backup.keep())
+    return jsonify(backups=backup.list_backups(conn.db_file), keep=backup.keep(),
+                   disabled=backup.disabled())
+
+
+@bp.post("/db/backups")
+def db_backup_now():
+    denied = _require_write()
+    if denied:
+        return denied
+    conn = _conn()
+    if not conn.db_file:
+        return jsonify(error="Nema baze na disku."), 400
+    return jsonify(backup=backup.make_backup(conn.db_file, "ručno"))
+
+
+@bp.get("/db/backups/<name>.zip")
+def db_backup_download(name):
+    denied = _require_write()            # cijela baza: samo uz lozinku
+    if denied:
+        return denied
+    conn = _conn()
+    path = backup.zip_path(conn.db_file, name) if conn.db_file else None
+    if path is None:
+        return jsonify(error="Backup ne postoji."), 404
+    resp = send_file(path, mimetype="application/zip", as_attachment=True,
+                     download_name=f"pjesme-backup-{name}.zip", max_age=0)
+    resp.call_on_close(lambda: os.path.exists(path) and os.remove(path))
+    return resp
 
 
 # ── Uređivanje pjesme ─────────────────────────────────────────────────────────
@@ -854,6 +893,7 @@ DB_PAGE = r"""<!doctype html>
   </div>
   <span class="grow"></span>
   <span class="chip" id="stats"></span>
+  <button class="btn" id="btnBackup" title="Backup baze i nota (automatski svaki dan)">💾 Backup</button>
   <a class="btn" href="./" title="Natrag na pretvaranje i uređivanje pjesmarice">← Konverter</a>
   <button id="btnTheme" title="Svijetla/tamna tema">☀️</button>
 </header>
@@ -1622,6 +1662,49 @@ async function showVersions(id) {
     showView(box);
   } catch (e) { toast(e.message, true); }
 }
+
+/* ── Backup ── */
+async function showBackups() {
+  try {
+    const d = await json(await fetch("db/backups"));
+    const box = el("div");
+    box.append(el("h2", null, "Backup baze i nota"));
+    box.append(el("p", "muted", d.disabled ? "Automatski backup je isključen (BACKUP_DISABLE)." :
+      "Automatski jednom dnevno; čuva se zadnjih " + d.keep + ". Kopije su na serveru u data/backup — " +
+      "za zaštitu od kvara diska povremeno preuzmi ZIP i spremi ga drugdje."));
+    const now = el("button", "btn primary", "💾 Napravi backup sada");
+    now.onclick = async () => {
+      busy("Radim backup…");
+      try { await json(await api("db/backups", { method: "POST" })); toast("Backup napravljen."); showBackups(); }
+      catch (e) { toast(e.message, true); } finally { busy(null); }
+    };
+    const acts = el("div", "actions"); acts.append(now); box.append(acts);
+    const ul = el("ul", "versions");
+    if (!d.backups.length) ul.append(el("li", "muted", "Još nema backupa."));
+    d.backups.forEach(b => {
+      const li = el("li");
+      li.append(el("span", null, b.created ? new Date(b.created).toLocaleString("hr-HR") : b.name),
+                el("span", "muted", (b.songs ?? "?") + " pjesama · " + (b.notes ?? 0) + " nota · " +
+                   fmtSize(b.size || 0) + (b.reason ? " · " + b.reason : "")),
+                el("span", "grow"));
+      const dl = el("button", "btn", "⬇ ZIP");
+      dl.onclick = async () => {
+        busy("Pakiram backup…");
+        try {
+          const res = await api("db/backups/" + encodeURIComponent(b.name) + ".zip");
+          if (!res.ok) await json(res);
+          const a = document.createElement("a"); a.href = URL.createObjectURL(await res.blob());
+          a.download = "pjesme-backup-" + b.name + ".zip"; a.click(); URL.revokeObjectURL(a.href);
+        } catch (e) { toast(e.message, true); } finally { busy(null); }
+      };
+      li.append(dl); ul.append(li);
+    });
+    box.append(ul);
+    state.view = "backup";
+    showView(box);
+  } catch (e) { toast(e.message, true); }
+}
+$("btnBackup").onclick = showBackups;
 
 /* ── Uvoz ── */
 const drop = $("drop");
