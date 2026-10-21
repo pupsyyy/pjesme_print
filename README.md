@@ -126,6 +126,31 @@ oznake (pjesme koje već imamo ne). Oznake zbirki (Pučke pjesme, Veliki zbor
 i vlastite) imaju 👁 — klik **sakrije** te pjesme iz popisa (pamti se u
 pregledniku), npr. kad uvezeš puno pjesama koje inače ne trebaš.
 
+**Uređivanje pjesme** — „✎ Uredi": naslov, podnaslov, tonalitet, metapodaci i
+tekst s akordima u retku **iznad** teksta (kao u uredniku pjesmarice; `[Refren]`
+u svom retku = nova sekcija), uz pregled uživo. Nepromijenjeni retci ostaju točno
+kakvi su bili (izvorni izgled se ne mijenja bez potrebe). Svaka prethodna verzija
+se čuva — „🕘 Povijest" → „↶ Vrati ovu".
+
+**Transpozicija** — izbornik „🎚 Tonalitet" na pjesmi (−5…+6 polutonova, s
+nazivom tonaliteta). Razumije hrvatski zapis (H, B = B♭, fis, es, malo slovo = mol,
+spojeni akordi iz Worda poput „AHE") i engleski (Bb, F#m, D/F#); povisilice ili
+snizilice prema ciljnom tonalitetu. Vrijedi i za PDF, ChordPro, „Napravi pjesmaricu"
+i API (`?transpose=2`).
+
+**Popis za misu** — „📋 Popis za misu": pjesme po dijelovima mise (Ulazna,
+Gospodine, Slava, Psalam, Aleluja, Prinos, Svet, Jaganjče Božji, Pričest, Zahvala,
+Završna, i vlastiti dijelovi), svaka u svom tonalitetu. „＋ dodaj" najprije nudi
+pjesme koje su se već pjevale za taj dio, pa one s odgovarajućom oznakom. Iz
+popisa: **PDF** (naslovnica s popisom + pjesme s akordima), **📋 Kopiraj popis**
+(tekst za poruku), **🔗 Link za zbor** — stranica za mobitel bez lozinke (pjesme
+s akordima, snimke, note), „↻ Novi link" poništi stari — i „Napravi pjesmaricu".
+Pjesma se u popis dodaje i s pjesme („📋 U popis za misu").
+
+**Backup** — automatski jednom dnevno (baza + note) u `data/backup/`, čuva se
+zadnjih 14 (`BACKUP_KEEP`); „💾 Backup": popis, „Napravi sada" i preuzimanje ZIP-a
+(uz lozinku baze) za spremanje izvan servera. Vraćanje: DEPLOY.md.
+
 Iz baze: pretraga (naslov, broj, tekst, bez obzira na dijakritike), filter po oznaci,
 pregled s akordima, preuzimanje PDF-a (izvorni izgled), ChordPro i JSON,
 te **„Napravi pjesmaricu"** — odabrane pjesme otvore se u uredniku
@@ -140,6 +165,7 @@ te **„Napravi pjesmaricu"** — odabrane pjesme otvore se u uredniku
 | `GET /api/v1/tags` | oznake s brojem pjesama |
 | `GET /api/v1/songs/<id>` | cijela pjesma: `meta`, `sections` (tekst + akordi), `lyrics`, `chordpro`, `sources`, `tags`, `notes`, `links` (snimke: `voice`, `url`, `kind` youtube/drive/audio/link, `embed`) |
 | `GET /api/v1/notes/<id>` | datoteka nota (id iz `notes` pjesme) |
+| `GET /api/v1/songs/<id>?transpose=2` | isto, akordi i tonalitet transponirani (polutonovi, −5…+6) |
 | `GET /api/v1/songs/<id>.cho` | ChordPro tekst |
 | `GET /api/v1/songs/<id>.pdf` | PDF u izvornom izgledu |
 | `GET /api/v1/export` | sve pjesme (JSON) — ujedno i backup |

@@ -97,6 +97,36 @@ tar czf ~/pjesme-note-$(date +%F).tgz -C data note     # note (PDF/slike/MusicXM
 
 ili `curl .../api/v1/export > pjesme.json` (sve pjesme kao JSON).
 
+**Automatski backup**: aplikacija sama jednom dnevno spremi bazu i note u
+`/opt/pjesme_print/data/backup/<datum_vrijeme>/` (note kao tvrde poveznice — ne
+zauzimaju dodatni prostor) i čuva zadnjih 14 (`BACKUP_KEEP=30` u `.env` za više,
+`BACKUP_DISABLE=1` isključuje). To štiti od grešaka (brisanje, krivi uvoz), ne od
+kvara diska — za to povremeno u bazi klikni „💾 Backup → ⬇ ZIP" i spremi ga drugdje.
+
+**Vraćanje backupa**:
+
+```bash
+cd /opt/pjesme_print
+ls data/backup/                                   # odaberi, npr. 2026-10-21_080000
+docker compose stop
+cp data/pjesme.db data/pjesme-prije-vracanja.db   # za svaki slučaj
+rm -f data/pjesme.db-wal data/pjesme.db-shm
+cp data/backup/2026-10-21_080000/pjesme.db data/pjesme.db
+cp -n data/backup/2026-10-21_080000/note/* data/note/ 2>/dev/null   # obrisane note natrag
+docker compose start
+```
+
+Jednu pjesmu nije potrebno vraćati iz backupa: kod uređivanja se svaka prethodna
+verzija čuva u bazi („✎ Uredi → 🕘 Povijest").
+
+### Popis za misu — link za zbor
+
+Link „🔗 Link za zbor" (`https://print.josip.cloud/p/<tajni-kod>`) radi bez
+lozinke baze. Ako je u Caddyju uključen `basic_auth`, `/p/*` mora biti izuzet
+(vidi `deploy/print.caddy`: `@protected not path /health /api/v1* /p/*`), inače
+će zbor dobiti upit za lozinku. Link ne otkriva ništa osim pjesama iz tog popisa;
+„↻ Novi link" poništi stari.
+
 ### Prepoznavanje nota iz PDF-a (neobavezno — Audiveris)
 
 Gumb „🔍 Prepoznaj" (PDF/slika nota → MusicXML) postoji samo ako je Docker

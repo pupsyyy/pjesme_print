@@ -918,6 +918,7 @@ DB_PAGE = r"""<!doctype html>
   .editor .fields { display: grid; grid-template-columns: 1fr 1fr 8rem; gap: .5rem; margin-bottom: .6rem; }
   .editor label { font-family: var(--ui); font-size: .75rem; color: var(--muted); display: flex;
                   flex-direction: column; gap: .2rem; }
+  .editor input { width: 100%; min-width: 0; }
   .editor input, .editor textarea { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
                   padding: .4rem .55rem; color: var(--text); font-size: .9rem; }
   .editor textarea { font-family: ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;

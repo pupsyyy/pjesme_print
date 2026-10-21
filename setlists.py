@@ -319,7 +319,11 @@ def _line_html(ln):
     for k, (i, ch) in enumerate(chords):
         a = min(i, len(text))
         b = min(chords[k + 1][0], len(text)) if k + 1 < len(chords) else len(text)
-        parts.append(f'<span class="sg"><b>{esc(ch)}</b><i>{esc(text[a:max(a, b)])}</i></span>')
+        seg = text[a:max(a, b)]
+        # akord širi od sloga usred riječi -> crtica ("alelu-ja"), kao u aplikaciji
+        hy = (seg and b < len(text) and seg[-1].isalnum() and text[b:b + 1].isalnum()
+              and len(ch) + 1 >= len(seg))
+        parts.append(f'<span class="sg"><b>{esc(ch)}</b><i{" class=hy" if hy else ""}>{esc(seg)}</i></span>')
     return f'<div class="ln">{"".join(parts)}</div>'
 
 
@@ -388,6 +392,7 @@ PUBLIC_PAGE = """<!doctype html>
  .ln {{ white-space:pre; min-height:1.4em; }} .co {{ color:var(--acc); font-weight:700; }}
  .sg {{ display:inline-flex; flex-direction:column; vertical-align:bottom; white-space:pre; }}
  .sg b {{ color:var(--acc); min-height:1.3em; padding-right:.3em; }} .sg i {{ font-style:normal; }}
+ .sg i.hy::after {{ content:"-"; }}
  .chips {{ display:flex; flex-wrap:wrap; gap:.4rem; margin:.5rem 0; }}
  .chip {{ border:1px solid var(--line); border-radius:999px; padding:.2rem .7rem; color:var(--fg);
    text-decoration:none; font-size:.85rem; }}

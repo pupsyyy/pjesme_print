@@ -221,3 +221,16 @@ nepromijenjena: 105/3/1). Prijedlozi za dalje (čeka izbor korisnika):
 5. vježbanje glasova iz MusicXML (zvuk po dionici) 6. tekst iz nota za pjesme "samo note"
 7. uvoz velikog ZIP-a u pozadini s napretkom 8. spajanje dvije pjesme (duplikati)
 9. podjela songdb_web.py (HTML/JS u zasebne datoteke)
+
+---
+# Faza 6 — "radi 1, 2, 3 i 4" (2026-10-21): uređivanje, transpozicija, popis za misu, backup
+PR #17 spojen (98ab25b); nova grana od main, PR #18.
+- [x] transpose.py — hrvatski (H, B=B♭, fis/es, malo = mol, spojeni "AHE"/"FGa") i engleski zapis;
+      povisilice/snizilice po ciljnom tonalitetu; ?transpose=n (pjesma, PDF, ChordPro, API, urednik)
+- [x] songedit.py — tekst s akordima iznad, [Oznaka]; 122/122 pjesama identično nakon spremanja bez
+      izmjena; song_versions (čuva 30), vraćanje; line_to_text_rows: akordi se ne slijepe
+- [x] backup.py — dnevno pri prvom zahtjevu (flock), sqlite backup + note hard link, BACKUP_KEEP 14, ZIP
+- [x] setlists.py — dijelovi mise, prijedlozi (pjevano za taj dio → oznaka), transpozicija po stavci,
+      PDF s naslovnicom, tekst za poruku, urednik, javni /p/<token> (mobitel), novi link; Caddy /p/*
+- [x] 110 testova; Playwright: transpozicija, urednik + povijest + vraćanje, popis (prijedlog Pričest,
+      tonalitet po stavci), stranica za zbor na mobitelu, backup — bez JS grešaka
