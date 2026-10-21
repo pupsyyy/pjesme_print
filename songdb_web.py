@@ -23,6 +23,7 @@ import backup
 import chord_extract
 import chord_render
 import importjobs
+import musicxml
 import omr
 import setlists
 import songdb
@@ -534,6 +535,70 @@ def _note_file(note_id):
 @bp.get("/db/notes/<int:note_id>")
 def db_note_file(note_id):
     return _note_file(note_id)
+
+
+def _musicxml_note(note_id):
+    """(opis, bajtovi) MusicXML note ili odgovor s greškom."""
+    found = songdb.get_note(_conn(), note_id)
+    if found is None or not found[1].exists():
+        return None, (jsonify(error="Note ne postoje."), 404)
+    note, path = found
+    if note["kind"] != "musicxml":
+        return None, (jsonify(error="Ovo radi samo s MusicXML notama (.musicxml/.mxl)."), 400)
+    return (note, path.read_bytes()), None
+
+
+def _vocab(conn, song_id):
+    """Poznate riječi za spajanje slogova: iz svih pjesama u bazi i iz teksta
+    ispod nota u PDF-ovima iste pjesme (ondje su slogovi točno označeni)."""
+    import collections
+
+    import pdfplumber
+    import scorepages
+    vocab = collections.Counter()
+    for (lyr,) in conn.execute("SELECT lyrics FROM songs"):
+        for w in lyr.split():
+            vocab[musicxml._norm_word(w)] += 1
+    for n in songdb.list_notes(conn, song_id):
+        if n["kind"] != "pdf":
+            continue
+        found = songdb.get_note(conn, n["id"])
+        try:
+            with pdfplumber.open(str(found[1])) as doc:
+                for page in doc.pages[:20]:
+                    info = scorepages.classify(page)
+                    for w in scorepages.lyric_words(page, info) if info else []:
+                        vocab[musicxml._norm_word(w)] += 3       # isti izvor vrijedi više
+        except Exception:  # noqa: BLE001 — loš PDF: samo bez tih riječi
+            continue
+    vocab.pop("", None)
+    return vocab
+
+
+@bp.get("/db/notes/<int:note_id>/lyrics")
+def db_note_lyrics(note_id):
+    """Prijedlog teksta (i akorda) pjesme iz MusicXML nota — za urednik."""
+    got, err = _musicxml_note(note_id)
+    if err:
+        return err
+    note, data = got
+    try:
+        res = musicxml.lyrics_text(data, _vocab(_conn(), note["song_id"]))
+    except musicxml.MusicXmlError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(body=res["body"], verses=res["verses"], chords=res["chords"], title=res["title"])
+
+
+@bp.get("/db/notes/<int:note_id>/events")
+def db_note_events(note_id):
+    """Note po dionicama za vježbanje glasova (zvuk u pregledniku)."""
+    got, err = _musicxml_note(note_id)
+    if err:
+        return err
+    try:
+        return jsonify(musicxml.events(got[1]))
+    except musicxml.MusicXmlError as exc:
+        return jsonify(error=str(exc)), 400
 
 
 @bp.patch("/db/notes/<int:note_id>")
@@ -1510,8 +1575,11 @@ function renderNotes(s, jobs) {
       card.append(el("div", "st", "⏳ Prepoznajem note… (≈ pola minute po stranici)"));
     else if (job && job.status === "error") card.append(el("div", "st bad", "✕ " + job.message));
     const acts = el("div", "acts");
-    if (viewable) { const v = el("button", "btn", "▶ Prikaži"); v.title = "Note u pregledniku, s transpozicijom";
-                    v.onclick = () => showScore(n, s); acts.append(v); }
+    if (viewable) { const v = el("button", "btn", "▶ Prikaži"); v.title = "Note u pregledniku: transpozicija i vježbanje glasova";
+                    v.onclick = () => showScore(n, s); acts.append(v);
+                    const lt = el("button", "btn", "📝 Tekst iz nota");
+                    lt.title = "Kitice (i akordi) iz teksta ispod nota — otvori se urednik da provjeriš prije spremanja";
+                    lt.onclick = () => lyricsFromNotes(n, s); acts.append(lt); }
     if (n.inline) { const o = el("a", "btn", "Otvori"); o.href = url; o.target = "_blank"; acts.append(o); }
     if (OMR && (n.kind === "pdf" || n.kind === "image") &&
         !(job && (job.status === "queued" || job.status === "running"))) {
@@ -1683,6 +1751,46 @@ function pickSong(title, excludeId, onPick, part) {
   q.focus(); search().catch(e => toast(e.message, true));
 }
 
+/* ── Zvuk iz nota (WebAudio): vježbanje glasova ── */
+function playNotes(ev, opts, onProgress, onEnd) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC();
+  const spb = 60 / (ev.tempo * (opts.tempoPct || 100) / 100);
+  const t0 = ctx.currentTime + 0.2;
+  const master = ctx.createGain(); master.gain.value = 0.22; master.connect(ctx.destination);
+  let end = 0;
+  ev.tracks.forEach((tr, i) => {
+    if (opts.mode === "solo" && i !== opts.track) return;
+    const vol = opts.mode === "emph" ? (i === opts.track ? 1 : 0.22) : 0.8;
+    const type = opts.mode !== "all" && i === opts.track ? "square" : "triangle";
+    tr.notes.forEach(([t, d, m]) => {
+      const start = t0 + t * spb, dur = Math.max(0.06, d * spb);
+      end = Math.max(end, t + d);
+      const o = ctx.createOscillator(); o.type = type;
+      o.frequency.value = 440 * Math.pow(2, (m + (opts.transpose || 0) - 69) / 12);
+      const g = ctx.createGain();
+      const peak = (type === "square" ? 0.35 : 0.6) * vol;
+      g.gain.setValueAtTime(0, start);
+      g.gain.linearRampToValueAtTime(peak, start + 0.02);
+      g.gain.setValueAtTime(peak, start + dur * 0.8);
+      g.gain.linearRampToValueAtTime(0, start + dur * 0.98);
+      o.connect(g); g.connect(master);
+      o.start(start); o.stop(start + dur);
+    });
+  });
+  const total = end * spb;
+  let raf = 0, stopped = false;
+  const tick = () => {
+    if (stopped) return;
+    const frac = Math.min(1, (ctx.currentTime - t0) / (total || 1));
+    onProgress(Math.max(0, frac));
+    if (frac >= 1) { onEnd(); return; }
+    raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+  return { stop() { stopped = true; cancelAnimationFrame(raf); ctx.close(); } };
+}
+
 /* ── Prikaz MusicXML nota (Verovio), transpozicija ── */
 let verovioReady = null;
 function loadVerovio() {
@@ -1721,12 +1829,42 @@ async function showScore(n, s) {
   zoom.value = "40";
   const prev = el("button", "btn", "◀"), next = el("button", "btn", "▶"), info = el("span", "muted");
   const dl = el("a", "btn", "⬇ MusicXML"); dl.href = "db/notes/" + n.id + "?download=1";
-  const close = el("button", "btn", "✕ Zatvori"); close.onclick = () => modal.remove();
+  const close = el("button", "btn", "✕ Zatvori");
   bar.append(el("span", null, "Transpozicija:"), tr, zoom, prev, info, next, dl, close);
+  // vježbanje glasova: zvuk iz nota (svi / samo jedan / jedan naglašen)
+  const pbar = el("div", "bar");
+  const voice = el("select"); voice.title = "Koji glas";
+  voice.append(new Option("🎧 Svi glasovi", "all"));
+  const tempo = el("select"); tempo.title = "Tempo";
+  [["50", "50 %"], ["75", "75 %"], ["100", "100 % tempa"], ["125", "125 %"]].forEach(([v, t]) => tempo.append(new Option(t, v)));
+  tempo.value = "100";
+  const play = el("button", "btn primary", "▶ Sviraj");
+  const prog = el("div", "progress"); prog.style.flex = "1"; prog.style.minWidth = "6rem";
+  const fill = el("div"); fill.style.width = "0%"; prog.append(fill);
+  pbar.append(el("span", null, "Vježbanje:"), voice, tempo, play, prog);
+  let ev = null, player = null;
+  fetch("db/notes/" + n.id + "/events").then(r => r.json()).then(d => {
+    if (!d.tracks) { pbar.classList.add("hidden"); return; }
+    ev = d;
+    d.tracks.forEach((t, i) => {
+      voice.append(new Option("samo " + t.name, "solo:" + i));
+      voice.append(new Option(t.name + " naglašeno", "emph:" + i));
+    });
+  }).catch(() => pbar.classList.add("hidden"));
+  const stopPlay = () => { if (player) { player.stop(); player = null; } play.textContent = "▶ Sviraj"; fill.style.width = "0%"; };
+  play.onclick = () => {
+    if (player) { stopPlay(); return; }
+    if (!ev) { toast("Note se još učitavaju…"); return; }
+    const [mode, idx] = voice.value.split(":");
+    player = playNotes(ev, { mode, track: Number(idx), tempoPct: Number(tempo.value), transpose: Number(tr.value) },
+                       frac => { fill.style.width = Math.round(frac * 100) + "%"; }, stopPlay);
+    play.textContent = "■ Stani";
+  };
+  close.onclick = () => { stopPlay(); modal.remove(); };
   const body = el("div", "body"), score = el("div", "score");
   body.append(score);
-  win.append(bar, body); modal.append(win);
-  modal.onclick = e => { if (e.target === modal) modal.remove(); };
+  win.append(bar, pbar, body); modal.append(win);
+  modal.onclick = e => { if (e.target === modal) { stopPlay(); modal.remove(); } };
   document.body.append(modal);
   let page = 1, pages = 1;
   const isZip = new Uint8Array(buf.slice(0, 2))[0] === 0x50;
@@ -1829,6 +1967,20 @@ async function openSong(id, keepScroll) {
   } catch (e) { toast(e.message, true); }
 }
 
+/* ── Tekst pjesme iz nota (MusicXML) ── */
+async function lyricsFromNotes(n, s) {
+  if (s.has_text && !confirm("Pjesma već ima tekst. Otvoriti urednik s tekstom iz nota umjesto postojećeg? " +
+                             "(ništa se ne mijenja dok ne spremiš; stari tekst ostaje u povijesti)")) return;
+  busy("Čitam tekst iz nota…");
+  try {
+    const r = await json(await fetch("db/notes/" + n.id + "/lyrics"));
+    busy(null);
+    showEditor(s.id, { body: r.body, info: "Prijedlog iz nota „" + n.name + "”: " + r.verses +
+      (r.verses === 1 ? " kitica" : " kitice") + ", " + r.chords + " akorda. Provjeri tekst " +
+      "(kod prepoznatih nota zna biti krivo pročitanih slova ili slogova) pa spremi." });
+  } catch (e) { busy(null); toast(e.message, true); }
+}
+
 /* ── Spajanje pjesama ── */
 function mergeDialog(s, other) {
   const modal = el("div", "modal"), win = el("div", "win"); win.style.width = "min(520px, 100%)";
@@ -1863,16 +2015,18 @@ function mergeDialog(s, other) {
 }
 
 /* ── Uređivanje pjesme ── */
-async function showEditor(id) {
+async function showEditor(id, prefill) {
   let f;
   try { f = await json(await fetch("db/songs/" + id + "/edit")); }
   catch (e) { toast(e.message, true); return; }
+  if (prefill && prefill.body) f.body = prefill.body;
   const box = el("div");
   const head = el("div", "song-head");
   head.append(el("h2", null, "Uređivanje: " + f.title), el("span", "grow"));
   const hist = el("button", "btn", "🕘 Povijest"); hist.onclick = () => showVersions(id);
   head.append(hist);
   box.append(head);
+  if (prefill && prefill.info) box.append(el("div", "info", prefill.info));
   const wrap = el("div", "editor");
   const left = el("div"), right = el("div", "prev");
   const fields = el("div", "fields");

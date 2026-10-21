@@ -389,3 +389,86 @@ def test_import_job_progress_resume_and_cleanup(tmp_path):
     assert job["status"] == "done" and "ne može otvoriti" in job["reports"][0]["error"]
     assert importjobs.active(conn) == []
     assert _json.loads(conn.execute("SELECT tags FROM import_jobs WHERE id=?", (jid,)).fetchone()[0]) == []
+
+
+# ── MusicXML: tekst iz nota i vježbanje glasova ──────────────────────────────
+
+def _note(step, octave, dur, lyric=None, syl="single", num="1", extra=""):
+    ly = (f'<lyric number="{num}"><syllabic>{syl}</syllabic><text>{lyric}</text></lyric>'
+          if lyric else "")
+    return (f"<note>{extra}<pitch><step>{step}</step><octave>{octave}</octave></pitch>"
+            f"<duration>{dur}</duration><voice>1</voice>{ly}</note>")
+
+
+def _harm(root, kind="major", alter=None):
+    a = f"<root-alter>{alter}</root-alter>" if alter else ""
+    return f"<harmony><root><root-step>{root}</root-step>{a}</root><kind>{kind}</kind></harmony>"
+
+
+MXL = ("<?xml version='1.0'?><score-partwise version='3.1'>"
+       "<work><work-title>Slava Tebi</work-title></work>"
+       "<part-list><score-part id='P1'><part-name>Sopran</part-name></score-part>"
+       "<score-part id='P2'><part-name>Bas</part-name></score-part></part-list>"
+       "<part id='P1'><measure number='1'><attributes><divisions>2</divisions></attributes>"
+       "<direction><sound tempo='120'/></direction>"
+       + _harm("G") + _note("G", 4, 2, "Sla", "begin") + _note("A", 4, 2, "va,", "end")
+       + _harm("D") + _note("B", 4, 2, "Te", "begin") + _note("C", 5, 2, "bi", "end")
+       + "</measure><measure number='2'><print new-system='yes'/>"
+       + _harm("E", "minor") + _note("D", 5, 4, "Bo", "begin", extra="")
+       + _note("D", 5, 4, "že", "end") + "</measure></part>"
+       "<part id='P2'><measure number='1'><attributes><divisions>2</divisions></attributes>"
+       + _note("G", 2, 8) + "</measure><measure number='2'>"
+       + "<note><pitch><step>E</step><octave>2</octave></pitch><duration>4</duration><voice>1</voice><tie type='start'/></note>"
+       + "<note><pitch><step>E</step><octave>2</octave></pitch><duration>4</duration><voice>1</voice><tie type='stop'/></note>"
+       + "</measure></part></score-partwise>").encode()
+
+
+def test_musicxml_events_and_lyrics():
+    import musicxml
+    ev = musicxml.events(MXL)
+    assert ev["tempo"] == 120 and [t["name"] for t in ev["tracks"]] == ["Sopran", "Bas"]
+    assert ev["tracks"][0]["notes"][:2] == [[0.0, 1.0, 67], [1.0, 1.0, 69]]
+    assert ev["tracks"][1]["notes"] == [[0.0, 4.0, 43], [4.0, 4.0, 40]]        # vezana nota = jedna
+    r = musicxml.lyrics(MXL)
+    assert r["title"] == "Slava Tebi" and r["verses"] == 1
+    assert r["sections"][0]["lines"] == [{"text": "Slava, Tebi Bože", "chords": [[0, "G"], [7, "D"], [12, "Em"]]}]
+    body = musicxml.lyrics_text(MXL)["body"]
+    assert body.splitlines()[:2] == ["G      D    Em", "Slava, Tebi Bože"]
+    with pytest.raises(musicxml.MusicXmlError):
+        musicxml.load(b"<html/>")
+    with pytest.raises(musicxml.MusicXmlError):
+        musicxml.load(b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "b">]><score-partwise/>')
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("META-INF/container.xml", '<container><rootfiles><rootfile full-path="s.xml"/></rootfiles></container>')
+        z.writestr("s.xml", MXL)
+    assert musicxml.events(buf.getvalue())["tracks"][0]["name"] == "Sopran"      # .mxl
+
+
+def test_musicxml_segmentation_with_vocabulary():
+    import musicxml
+    # prepoznate note (OMR): krive oznake slogova, "SUS" velikim slovima, "Ije" umjesto "lje"
+    syl = [("single", "I"), ("begin", "SUS"), ("middle", "naj"), ("middle", "Ije"), ("end", "pše"),
+           ("begin", "i"), ("middle", "me,")]
+    vocab = {"isus": 3, "najljepše": 3, "ime": 3}
+    notes = "".join(_note("C", 5, 1, t, k) for k, t in syl)
+    data = ("<score-partwise><part-list><score-part id='P1'><part-name>S</part-name></score-part></part-list>"
+            "<part id='P1'><measure><attributes><divisions>1</divisions></attributes>" + notes
+            + "</measure></part></score-partwise>").encode()
+    assert musicxml.lyrics(data, vocab)["sections"][0]["lines"][0]["text"] == "Isus najljepše ime,"
+
+
+def test_web_note_lyrics_and_events(client):
+    ids = _songs_for_mass(client)
+    sid = ids["Zdravo Marijo"]
+    nid = client.post(f"/db/songs/{sid}/notes", data={"file": (io.BytesIO(MXL), "slava.musicxml")},
+                      content_type="multipart/form-data").get_json()["added"][0]["id"]
+    r = client.get(f"/db/notes/{nid}/lyrics").get_json()
+    assert r["verses"] == 1 and r["chords"] == 3 and "Slava, Tebi Bože" in r["body"]
+    ev = client.get(f"/db/notes/{nid}/events").get_json()
+    assert len(ev["tracks"]) == 2
+    pid = client.post(f"/db/songs/{sid}/notes", data={"file": (io.BytesIO(_png()), "x.png")},
+                      content_type="multipart/form-data").get_json()["added"][0]["id"]
+    assert client.get(f"/db/notes/{pid}/lyrics").status_code == 400
+    assert client.get("/db/notes/999/events").status_code == 404
