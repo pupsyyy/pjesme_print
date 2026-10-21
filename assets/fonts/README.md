@@ -1,4 +1,4 @@
-# Open Sans 1.10
+# Open Sans 1.10 (Regular, Bold, Italic)
 
 Open Sans (Steve Matteson), verzija 1.10 — ista verzija koju koristi aplikacija
 iz koje dolaze izvorni PDF-ovi pjesama (širine svih slova se poklapaju), pa se

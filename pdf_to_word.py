@@ -47,13 +47,15 @@ STYLE_DEFAULTS = {
 # Labele sekcija koje se ispisuju boldano
 SECTION_LABELS = re.compile(
     r"^(Chorus\s*\d*|Verse\s*\d*|Bridge\s*\d*|Intro|Outro|Pre-?Chorus|Tag|"
+    r"Refren\s*\d*|Pripjev\s*\d*|Kitica\s*\d*|Strofa\s*\d*|"
     r"V\d+(?:\s*\([^)]+\))?|C\d*|B\d*|BRIDGE|Verse|verse|chorus)\s*(\(.*\))?\s*$",
     re.IGNORECASE,
 )
 
 # Sekcije koje se u kompaktnom izgledu tretiraju kao REFREN (uvučen, bold+kurziv)
 CHORUS_TYPES = re.compile(
-    r"^(Chorus\s*\d*|C\d*|Bridge\s*\d*|B\d*|BRIDGE|Pre-?Chorus|Tag|Outro)\s*(\(.*\))?$",
+    r"^(Chorus\s*\d*|C\d*|Bridge\s*\d*|B\d*|BRIDGE|Pre-?Chorus|Tag|Outro|"
+    r"Refren\s*\d*|Pripjev\s*\d*)\s*(\(.*\))?$",
     re.IGNORECASE,
 )
 

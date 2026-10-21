@@ -36,7 +36,7 @@ def _mid_word(text, i):
     return 0 < i < len(text) and text[i - 1].isalnum() and text[i].isalnum()
 
 
-def layout_pair(text, chords, size, prof, left=LEFT):
+def layout_pair(text, chords, size, prof, left=LEFT, style="regular"):
     """Položaji akorda iznad teksta (+ crtice koje v2 ubacuje).
 
     Vrati (tekst_za_ispis, pomaci, [(x, akord), ...]); pomaci[i] = dodatni
@@ -46,10 +46,10 @@ def layout_pair(text, chords, size, prof, left=LEFT):
     chords = sorted(chords, key=lambda c: c[0])
     idx = [min(max(int(i), 0), len(text)) for i, _ in chords]
     extra = {}
-    hw = opensans.width("-", False, size)
+    hw = opensans.width("-", style, size)
 
     def X(i):
-        return left + opensans.width(text[:i], False, size) + \
+        return left + opensans.width(text[:i], style, size) + \
             sum(w for j, w in extra.items() if j <= i)
 
     out = []
@@ -65,7 +65,7 @@ def layout_pair(text, chords, size, prof, left=LEFT):
                 visible = _mid_word(text, a)
                 n = 0
                 while x < need - 1e-6 and n < 30:
-                    if visible:                           # "alelu-ja"
+                    if visible and n == 0:                # "alelu-ja" (jedna crtica)
                         text = text[:a] + "-" + text[a:]
                         extra = {(j + 1 if j >= a else j): w for j, w in extra.items()}
                         idx = [j + 1 if (j > a or (j == a and m > k)) else j
@@ -119,9 +119,10 @@ class _Writer:
 
     # ── crtanje ──
     def runs(self, text, x0, baseline, bold, size, extra=None):
-        """Svaka riječ od točnog x (kao izvorna aplikacija)."""
-        font = self.bold if bold else self.reg
-        self.c.setFont(font, size)
+        """Svaka riječ od točnog x (kao izvorna aplikacija).
+
+        bold: True/False ili "bold" / "italic" / "regular"."""
+        self.c.setFont(opensans.font_name(bold), size)
         i = 0
         n = len(text)
         while i < n:
@@ -220,9 +221,7 @@ class _Writer:
                 toks = [[i, t] for i, t in _tokens(text)]
                 self.row("body", size, lambda bl: self.mono(toks, bl, True, size))
             return
-        if fmt.get("text") == "bold":
-            self.row("body", size, lambda bl: self.runs(text, self.left, bl, True, size))
-            return
+        style = fmt.get("text") if fmt.get("text") in ("bold", "italic") else "regular"
         if chords and not text.strip():               # samo akordi (stupci)
             self.row("body", size, lambda bl: self.mono(chords, bl, True, size))
             return
@@ -230,13 +229,14 @@ class _Writer:
             pair = self.prof["pair"]
             self.ensure(pair + line_h)
             bl = self.y + asc
-            shown, extra, placed = layout_pair(text, chords, size, self.prof, self.left)
+            shown, extra, placed = layout_pair(text, chords, size, self.prof,
+                                               self.left, style)
             for x, ch in placed:
                 self.runs(ch, x, bl, True, size)
-            self.runs(shown, self.left, bl + pair, False, size, extra)
+            self.runs(shown, self.left, bl + pair, style, size, extra)
             self.y += pair + line_h
             return
-        self.row("body", size, lambda bl: self.runs(text, self.left, bl, False, size))
+        self.row("body", size, lambda bl: self.runs(text, self.left, bl, style, size))
 
     def finish(self):
         if self.started:

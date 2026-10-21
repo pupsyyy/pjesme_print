@@ -1,6 +1,12 @@
 services:
   pjesme:
-    build: .
+    build:
+      context: .
+      args:
+        # 1 = i prepoznavanje nota iz PDF-a (Audiveris -> MusicXML); slika je
+        # ~250 MB veća, a prepoznavanje treba ~1 GB RAM-a. Upiši WITH_OMR=1 u .env
+        # i ponovo izgradi: docker compose up -d --build
+        WITH_OMR: ${WITH_OMR:-0}
     container_name: pjesme_print
     restart: unless-stopped
     ports:
@@ -11,7 +17,8 @@ services:
       # Za izravni pristup izvana (http://IP:8010/, bez proxyja) zamijeni s:
       # - "8010:8000"
     environment:
-      - MAX_UPLOAD_MB=50
+      # ZIP s puno PDF-ova može biti velik
+      - MAX_UPLOAD_MB=200
       - DB_PATH=/app/data/pjesme.db
       # Lozinka za uvoz/brisanje u bazi pjesama i token za API drugih aplikacija.
       # Upiši ih u datoteku .env pored ovog docker-compose.yml (ne ide u git):
