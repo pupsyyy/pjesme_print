@@ -220,3 +220,89 @@ def _png():
     buf = io.BytesIO()
     Image.new("RGB", (10, 10), "white").save(buf, "PNG")
     return buf.getvalue()
+
+
+# ── Popis za misu ─────────────────────────────────────────────────────────────
+
+def _songs_for_mass(client):
+    from test_scores import _song
+    s2 = _song_v2()
+    other = _song("Zdravo Marijo", "Zdravo Marijo milosti puna Gospodin s tobom")
+    other["sections"][0]["lines"][0]["chords"] = [[0, "D"], [7, "A"]]
+    other["key"] = "D"
+    _upload(client, chord_render.render_pdf([s2, other]))
+    return {s["title"]: s["id"] for s in client.get("/db/songs").get_json()["items"]}
+
+
+def test_web_setlist_flow(client):
+    import pdfplumber
+    ids = _songs_for_mass(client)
+    a, z = ids["Aleluja (Bože svet si)"], ids["Zdravo Marijo"]
+    sl = client.post("/db/setlists", json={"title": "Misa", "date": "2026-10-25"}).get_json()["setlist"]
+    sid, tok = sl["id"], sl["token"]
+    assert len(tok) >= 12
+    client.post(f"/db/setlists/{sid}/items", json={"song_id": z, "part": "Završna"})
+    r = client.post(f"/db/setlists/{sid}/items", json={"song_id": a, "part": "Ulazna", "transpose": 2})
+    items = r.get_json()["setlist"]["items"]
+    assert [(i["part"], i["title"], i["key"]) for i in items] == [
+        ("Ulazna", "Aleluja (Bože svet si)", "A"), ("Završna", "Zdravo Marijo", "D")]
+    client.post(f"/db/setlists/{sid}/items", json={"song_id": z, "part": "Ulazna"})
+    ul = [i for i in client.get(f"/db/setlists/{sid}").get_json()["setlist"]["items"] if i["part"] == "Ulazna"]
+    assert client.post(f"/db/setlist-items/{ul[1]['id']}/move", json={"step": -1}).get_json()["ok"]
+    ul2 = [i["title"] for i in client.get(f"/db/setlists/{sid}").get_json()["setlist"]["items"] if i["part"] == "Ulazna"]
+    assert ul2 == ["Zdravo Marijo", "Aleluja (Bože svet si)"]
+    assert client.delete(f"/db/setlist-items/{ul[1]['id']}").get_json()["ok"]
+    assert client.patch(f"/db/setlist-items/{ul[0]['id']}", json={"transpose": -2}).get_json()["ok"]
+    text = client.get(f"/db/setlists/{sid}/text").get_json()["text"]
+    assert text.splitlines() == ["Misa — 25. 10. 2026.", "Ulazna: Aleluja (Bože svet si) (F)",
+                                 "Završna: Zdravo Marijo (D)"]
+    pdf = client.get(f"/db/setlists/{sid}/pdf")
+    with pdfplumber.open(io.BytesIO(pdf.data)) as doc:
+        pages = [p.extract_text() for p in doc.pages]
+    assert "Ulazna" in pages[0] and "Aleluja (Bože svet si)" in pages[0] and len(pages) == 3
+    assert "Key: F" in pages[1]                                    # transponirano u popisu
+    # prijedlozi: već pjevano za taj dio
+    sug = client.get("/db/setlists/suggest?part=Završna").get_json()["songs"]
+    assert sug[0]["title"] == "Zdravo Marijo" and sug[0]["used"] == 1
+    ed = client.get(f"/db/setlists/{sid}/editor").get_json()
+    assert [s["title"] for s in ed["songs"]] == ["Aleluja (Bože svet si)", "Zdravo Marijo"]
+    # javni link (bez lozinke, samo čitanje)
+    page = client.get(f"/p/{tok}")
+    body = page.get_data(as_text=True)
+    assert page.status_code == 200 and "Aleluja (Bože svet si)" in body and "Tonalitet: F" in body
+    assert "<b>F</b>" in body and page.headers["X-Robots-Tag"] == "noindex"
+    assert client.get(f"/p/{tok}/pdf").status_code == 200
+    assert client.get("/p/krivi-token").status_code == 404
+    # nove note samo uz pjesme iz popisa
+    import base64
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==")
+    nid = client.post(f"/db/songs/{a}/notes", data={"file": (io.BytesIO(png), "sopran.png")},
+                      content_type="multipart/form-data").get_json()["added"][0]["id"]
+    assert f"/p/{tok}/notes/{nid}" in client.get(f"/p/{tok}").get_data(as_text=True)
+    assert client.get(f"/p/{tok}/notes/{nid}").status_code == 200
+    _upload(client, chord_render.render_pdf([dict(_song_v2(), title="Treća pjesma",
+                                                  sections=[{"label": None, "lines": [{"text": "sasvim drukčiji tekst ovdje", "chords": []}]}])]))
+    third = {s["title"]: s["id"] for s in client.get("/db/songs").get_json()["items"]}["Treća pjesma"]
+    nid2 = client.post(f"/db/songs/{third}/notes", data={"file": (io.BytesIO(png), "x.png")},
+                       content_type="multipart/form-data").get_json()["added"][0]["id"]
+    assert client.get(f"/p/{tok}/notes/{nid2}").status_code == 404
+    # novi link: stari prestaje raditi
+    tok2 = client.post(f"/db/setlists/{sid}/token").get_json()["token"]
+    assert tok2 != tok and client.get(f"/p/{tok}").status_code == 404 and client.get(f"/p/{tok2}").status_code == 200
+    # brisanje pjesme miče je iz popisa
+    client.delete(f"/db/songs/{z}")
+    assert [i["title"] for i in client.get(f"/db/setlists/{sid}").get_json()["setlist"]["items"]] == [
+        "Aleluja (Bože svet si)"]
+    assert client.get("/db/setlists").get_json()["setlists"][0]["count"] == 1
+    assert client.delete(f"/db/setlists/{sid}").get_json()["ok"]
+    assert client.get(f"/db/setlists/{sid}").status_code == 404
+
+
+def test_web_setlist_needs_password(client, monkeypatch):
+    monkeypatch.setenv("DB_PASSWORD", "tajna")
+    assert client.post("/db/setlists", json={"title": "Misa"}).status_code == 401
+    sl = client.post("/db/setlists", json={"title": "Misa"}, headers={"X-DB-Password": "tajna"}).get_json()
+    sid = sl["setlist"]["id"]
+    assert client.post(f"/db/setlists/{sid}/items", json={"song_id": 1}).status_code == 401
+    assert client.delete(f"/db/setlists/{sid}").status_code == 401
+    assert client.get(f"/p/{sl['setlist']['token']}").status_code == 200    # zbor bez lozinke

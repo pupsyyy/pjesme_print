@@ -138,7 +138,8 @@ def connect(path=None):
         # pisaćom bravom da dva gunicorn workera ne nadograđuju istodobno
         conn.execute("BEGIN IMMEDIATE")
         try:
-            for script in (SCHEMA, songnotes.SCHEMA, songlinks.SCHEMA, omr.SCHEMA):
+            import setlists  # noqa: PLC0415 — setlists uvozi songdb
+            for script in (SCHEMA, songnotes.SCHEMA, songlinks.SCHEMA, omr.SCHEMA, setlists.SCHEMA):
                 for stmt in script.split(";"):
                     if stmt.strip():
                         conn.execute(stmt)

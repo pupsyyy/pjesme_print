@@ -23,6 +23,7 @@ import backup
 import chord_extract
 import chord_render
 import omr
+import setlists
 import songdb
 import songedit
 import songimport
@@ -180,6 +181,173 @@ def _tr():
 def db_song(song_id):
     s = songdb.get_song(_conn(), song_id, _tr())
     return jsonify(s) if s else (jsonify(error="Pjesma ne postoji."), 404)
+
+
+# ── Popis za misu ─────────────────────────────────────────────────────────────
+
+def _json_body():
+    return request.get_json(silent=True) or {}
+
+
+@bp.get("/db/setlists")
+def db_setlists():
+    return jsonify(setlists=setlists.list_setlists(_conn()), parts=setlists.PARTS)
+
+
+@bp.post("/db/setlists")
+def db_setlist_create():
+    denied = _require_write()
+    if denied:
+        return denied
+    d = _json_body()
+    conn = _conn()
+    sid = setlists.create(conn, str(d.get("title") or ""), str(d.get("date") or ""))
+    return jsonify(setlist=setlists.get(conn, sid))
+
+
+@bp.get("/db/setlists/<int:setlist_id>")
+def db_setlist(setlist_id):
+    sl = setlists.get(_conn(), setlist_id)
+    return jsonify(setlist=sl, parts=setlists.PARTS) if sl else (jsonify(error="Popis ne postoji."), 404)
+
+
+@bp.patch("/db/setlists/<int:setlist_id>")
+def db_setlist_update(setlist_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    d = _json_body()
+    ok = setlists.update(_conn(), setlist_id, d.get("title"), d.get("date"), d.get("note"))
+    return jsonify(ok=True) if ok else (jsonify(error="Popis ne postoji."), 404)
+
+
+@bp.delete("/db/setlists/<int:setlist_id>")
+def db_setlist_delete(setlist_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    ok = setlists.delete(_conn(), setlist_id)
+    return jsonify(ok=True) if ok else (jsonify(error="Popis ne postoji."), 404)
+
+
+@bp.post("/db/setlists/<int:setlist_id>/token")
+def db_setlist_token(setlist_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    tok = setlists.new_token(_conn(), setlist_id)
+    return jsonify(token=tok) if tok else (jsonify(error="Popis ne postoji."), 404)
+
+
+@bp.post("/db/setlists/<int:setlist_id>/items")
+def db_setlist_add(setlist_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    d = _json_body()
+    try:
+        iid = setlists.add_item(_conn(), setlist_id, int(d.get("song_id") or 0),
+                                str(d.get("part") or ""), d.get("transpose") or 0)
+    except (setlists.SetlistError, ValueError) as exc:
+        return jsonify(error=str(exc) or "Neispravna pjesma."), 400
+    if iid is None:
+        return jsonify(error="Popis ne postoji."), 404
+    return jsonify(item_id=iid, setlist=setlists.get(_conn(), setlist_id))
+
+
+@bp.patch("/db/setlist-items/<int:item_id>")
+def db_setlist_item_update(item_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    d = _json_body()
+    ok = setlists.update_item(_conn(), item_id, d.get("part"), d.get("transpose"))
+    return jsonify(ok=True) if ok else (jsonify(error="Stavka ne postoji."), 404)
+
+
+@bp.post("/db/setlist-items/<int:item_id>/move")
+def db_setlist_item_move(item_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    ok = setlists.move_item(_conn(), item_id, int(_json_body().get("step") or 1))
+    return jsonify(ok=True) if ok else (jsonify(error="Stavka ne postoji."), 404)
+
+
+@bp.delete("/db/setlist-items/<int:item_id>")
+def db_setlist_item_delete(item_id):
+    denied = _require_write()
+    if denied:
+        return denied
+    ok = setlists.remove_item(_conn(), item_id)
+    return jsonify(ok=True) if ok else (jsonify(error="Stavka ne postoji."), 404)
+
+
+@bp.get("/db/setlists/suggest")
+def db_setlist_suggest():
+    return jsonify(songs=setlists.suggestions(_conn(), request.args.get("part", "")))
+
+
+def _setlist_pdf(sl):
+    name = _ascii_name(sl["title"] + ("_" + sl["date"] if sl["date"] else ""))
+    return _pdf_response(setlists.pdf(_conn(), sl), name, inline=request.args.get("inline") == "1")
+
+
+@bp.get("/db/setlists/<int:setlist_id>/pdf")
+def db_setlist_pdf(setlist_id):
+    sl = setlists.get(_conn(), setlist_id)
+    return _setlist_pdf(sl) if sl else (jsonify(error="Popis ne postoji."), 404)
+
+
+@bp.get("/db/setlists/<int:setlist_id>/text")
+def db_setlist_text(setlist_id):
+    sl = setlists.get(_conn(), setlist_id)
+    if sl is None:
+        return jsonify(error="Popis ne postoji."), 404
+    return jsonify(text=setlists.as_text(sl))
+
+
+@bp.get("/db/setlists/<int:setlist_id>/editor")
+def db_setlist_editor(setlist_id):
+    conn = _conn()
+    sl = setlists.get(conn, setlist_id)
+    if sl is None:
+        return jsonify(error="Popis ne postoji."), 404
+    return jsonify(title=sl["title"], songs=[song_to_editor(d) for _it, d in setlists.songs(conn, sl)])
+
+
+# javni link za zbor: samo čitanje, bez lozinke (u Caddyju izuzeti /p/*)
+def _public(token):
+    sl = setlists.get(_conn(), token=token) if token else None
+    return sl
+
+
+@bp.get("/p/<token>")
+def public_setlist(token):
+    sl = _public(token)
+    if sl is None:
+        return Response("Popis ne postoji (ili je link promijenjen).", status=404,
+                        mimetype="text/plain")
+    base = f"{request.script_root}/p/{token}"
+    resp = make_response(setlists.public_html(_conn(), sl, base))
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["X-Robots-Tag"] = "noindex"
+    return resp
+
+
+@bp.get("/p/<token>/pdf")
+def public_setlist_pdf(token):
+    sl = _public(token)
+    return _setlist_pdf(sl) if sl else (jsonify(error="Popis ne postoji."), 404)
+
+
+@bp.get("/p/<token>/notes/<int:note_id>")
+def public_setlist_note(token, note_id):
+    sl = _public(token)
+    found = songdb.get_note(_conn(), note_id) if sl else None
+    if found is None or found[0]["song_id"] not in {it["song_id"] for it in sl["items"]}:
+        return jsonify(error="Note ne postoje."), 404
+    return _note_file(note_id)
 
 
 # ── Backup ────────────────────────────────────────────────────────────────────
@@ -764,6 +932,19 @@ DB_PAGE = r"""<!doctype html>
   .versions li { display: flex; gap: .6rem; align-items: center; padding: .25rem 0; font-family: var(--ui);
                  font-size: .84rem; }
   @media (max-width: 1000px) { .editor { grid-template-columns: 1fr; } .editor .fields { grid-template-columns: 1fr; } }
+  .sl-part { display: grid; grid-template-columns: 9.5rem 1fr; gap: .6rem; padding: .45rem 0;
+             border-bottom: 1px solid var(--border); align-items: start; }
+  .sl-part > b { font-family: var(--ui); font-size: .88rem; padding-top: .3rem; }
+  .sl-item { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; padding: .15rem 0;
+             font-family: var(--ui); font-size: .88rem; }
+  .sl-item a { color: var(--text); cursor: pointer; }
+  .sl-item .btn, .sl-part .btn { padding: .15rem .45rem; font-size: .75rem; }
+  .sl-item select { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+                    font-size: .75rem; padding: .1rem .3rem; color: var(--text); }
+  .sl-head { display: flex; gap: .5rem; flex-wrap: wrap; align-items: end; margin-bottom: .6rem; }
+  .sl-head input { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+                   padding: .35rem .55rem; color: var(--text); font-family: var(--ui); }
+  @media (max-width: 820px) { .sl-part { grid-template-columns: 1fr; } }
   .trchip { display: inline-flex; align-items: center; gap: .3rem; color: var(--text); }
   .trchip select { background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
                    padding: .05rem .4rem; font-size: .78rem; font-family: var(--ui); color: var(--text); }
@@ -893,6 +1074,7 @@ DB_PAGE = r"""<!doctype html>
   </div>
   <span class="grow"></span>
   <span class="chip" id="stats"></span>
+  <button class="btn" id="btnSetlists" title="Popisi pjesama za misu (PDF, link za zbor)">📋 Popis za misu</button>
   <button class="btn" id="btnBackup" title="Backup baze i nota (automatski svaki dan)">💾 Backup</button>
   <a class="btn" href="./" title="Natrag na pretvaranje i uređivanje pjesmarice">← Konverter</a>
   <button id="btnTheme" title="Svijetla/tamna tema">☀️</button>
@@ -1402,7 +1584,7 @@ function renderLinks(s) {
 }
 
 /* ── Odabir pjesme (premještanje nota) ── */
-function pickSong(title, excludeId, onPick) {
+function pickSong(title, excludeId, onPick, part) {
   const modal = el("div", "modal");
   const win = el("div", "win"); win.style.width = "min(560px, 100%)";
   const bar = el("div", "bar");
@@ -1415,11 +1597,23 @@ function pickSong(title, excludeId, onPick) {
   const ul = el("ul", "picklist");
   let t = null;
   const search = async () => {
-    const d = await json(await fetch("db/songs?limit=50&q=" + encodeURIComponent(q.value.trim())));
+    const qq = q.value.trim();
+    let items;
+    if (part && !qq) {           // prijedlozi za dio mise (već pjevane, s oznakom)
+      items = (await json(await fetch("db/setlists/suggest?part=" + encodeURIComponent(part)))).songs
+        .map(x => ({ ...x, has_text: true, hint: x.used ? "pjevano " + x.used + "×" : (x.tag === "auto" ? "prijedlog" : "") }));
+      if (!items.length) {
+        const d = await json(await fetch("db/songs?limit=50&q="));
+        items = d.items;
+      }
+    } else {
+      items = (await json(await fetch("db/songs?limit=50&q=" + encodeURIComponent(qq)))).items;
+    }
     ul.innerHTML = "";
-    d.items.filter(x => x.id !== excludeId).forEach(x => {
-      const li = el("li", null, x.title + (x.subtitle ? " — " + x.subtitle : ""));
+    items.filter(x => x.id !== excludeId).forEach(x => {
+      const li = el("li", null, x.title + (x.subtitle ? " — " + x.subtitle : "") + (x.key ? "  (" + x.key + ")" : ""));
       if (!x.has_text) li.append(el("span", "badge", "samo note"));
+      if (x.hint) li.append(el("span", "badge", x.hint));
       li.onclick = () => { modal.remove(); onPick(x); };
       ul.append(li);
     });
@@ -1552,7 +1746,9 @@ async function openSong(id, keepScroll) {
     const a3 = el("a", "btn", "JSON"); a3.href = "db/songs/" + id; a3.target = "_blank";
     const ed = el("button", "btn primary", "✎ Uredi"); ed.title = "Uredi naslov, tekst i akorde";
     ed.onclick = () => showEditor(id);
-    act.append(ed);
+    const toSl = el("button", "btn", "📋 U popis za misu");
+    toSl.onclick = () => addToSetlist(id, tr);
+    act.append(ed, toSl);
     const del = el("button", "btn danger", "Obriši");
     del.onclick = async () => {
       if (!confirm("Obrisati pjesmu \"" + s.title + "\" iz baze?")) return;
@@ -1660,6 +1856,193 @@ async function showVersions(id) {
     box.append(back);
     state.view = "versions";
     showView(box);
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ── Popis za misu ── */
+let SL_PARTS = [];
+function nextSunday() {
+  const d = new Date(); d.setDate(d.getDate() + ((7 - d.getDay()) % 7 || 7));
+  return d.toISOString().slice(0, 10);
+}
+function hrDate(iso) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-"); return d ? (+d) + ". " + (+m) + ". " + y + "." : iso;
+}
+async function showSetlists() {
+  try {
+    const d = await json(await fetch("db/setlists"));
+    SL_PARTS = d.parts;
+    const box = el("div");
+    box.append(el("h2", null, "Popisi za misu"));
+    box.append(el("p", "muted", "Pjesme po dijelovima mise, svaka u svom tonalitetu. Iz popisa: PDF, " +
+                  "tekst za poruku i link za zbor (mobitel, bez lozinke)."));
+    const head = el("div", "sl-head");
+    const t = el("input"); t.value = "Misa"; t.placeholder = "Naslov";
+    const dt = el("input"); dt.type = "date"; dt.value = nextSunday();
+    const add = el("button", "btn primary", "＋ Novi popis");
+    add.onclick = async () => {
+      try { const r = await json(await api("db/setlists", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                            body: JSON.stringify({ title: t.value, date: dt.value }) }));
+            showSetlist(r.setlist.id); }
+      catch (e) { toast(e.message, true); }
+    };
+    head.append(t, dt, add);
+    box.append(head);
+    const ul = el("ul", "versions");
+    if (!d.setlists.length) ul.append(el("li", "muted", "Još nema popisa."));
+    d.setlists.forEach(sl => {
+      const li = el("li");
+      const a = el("a", null, sl.title); a.href = "#"; a.onclick = e => { e.preventDefault(); showSetlist(sl.id); };
+      li.append(a, el("span", "muted", hrDate(sl.date) + " · " + sl.count + " pjesama"), el("span", "grow"));
+      ul.append(li);
+    });
+    box.append(ul);
+    state.view = "setlists";
+    showView(box);
+  } catch (e) { toast(e.message, true); }
+}
+$("btnSetlists").onclick = showSetlists;
+
+async function slApi(url, method, body) {
+  const opts = { method };
+  if (body) { opts.headers = { "Content-Type": "application/json" }; opts.body = JSON.stringify(body); }
+  return json(await api(url, opts));
+}
+async function showSetlist(id, keepScroll) {
+  let d;
+  try { d = await json(await fetch("db/setlists/" + id)); } catch (e) { toast(e.message, true); return; }
+  SL_PARTS = d.parts;
+  const sl = d.setlist;
+  const box = el("div");
+  const head = el("div", "sl-head");
+  const t = el("input"); t.value = sl.title; t.style.fontSize = "1.1rem"; t.style.fontWeight = "600";
+  const dt = el("input"); dt.type = "date"; dt.value = sl.date;
+  const saveHead = async () => { try { await slApi("db/setlists/" + id, "PATCH", { title: t.value, date: dt.value }); }
+                                 catch (e) { toast(e.message, true); } };
+  t.onchange = saveHead; dt.onchange = saveHead;
+  head.append(t, dt, el("span", "grow"));
+  box.append(head);
+  const acts = el("div", "actions");
+  const pdf = el("a", "btn primary", "⬇ PDF"); pdf.href = "db/setlists/" + id + "/pdf";
+  pdf.title = "Naslovnica s popisom + pjesme s akordima, u odabranim tonalitetima";
+  const txt = el("button", "btn", "📋 Kopiraj popis");
+  txt.onclick = async () => {
+    try { const r = await json(await fetch("db/setlists/" + id + "/text"));
+          await navigator.clipboard.writeText(r.text); toast("Popis kopiran — zalijepi ga u poruku."); }
+    catch (e) { toast("Kopiranje nije uspjelo: " + e.message, true); }
+  };
+  const share = el("button", "btn", "🔗 Link za zbor");
+  const url = new URL("p/" + sl.token, location.href).href;
+  share.title = url;
+  share.onclick = async () => {
+    try { await navigator.clipboard.writeText(url); toast("Link kopiran: " + url); }
+    catch (_e) { prompt("Link za zbor (kopiraj):", url); }
+  };
+  const open = el("a", "btn", "👁 Otvori kao zbor"); open.href = "p/" + sl.token; open.target = "_blank";
+  const editor = el("button", "btn", "Napravi pjesmaricu");
+  editor.title = "Otvori pjesme iz popisa u uredniku pjesmarice (kompaktno/klasično, Word)";
+  editor.onclick = async () => {
+    try {
+      const r = await json(await fetch("db/setlists/" + id + "/editor"));
+      const old = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
+      if (old && old.songs && old.songs.length &&
+          !confirm("U uredniku već postoji započeta pjesmarica (" + old.songs.length + " pjesama). Zamijeniti je?")) return;
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ filename: r.title, songs: r.songs.map(s => ({ ...s, include: true })),
+                                                       sel: 0, savedAt: Date.now() }));
+      location.href = "./#nastavi";
+    } catch (e) { toast(e.message, true); }
+  };
+  const relink = el("button", "btn", "↻ Novi link");
+  relink.title = "Stari link za zbor prestaje raditi (npr. ako je proslijeđen krivim ljudima)";
+  relink.onclick = async () => {
+    if (!confirm("Napraviti novi link? Stari link više neće raditi.")) return;
+    try { await slApi("db/setlists/" + id + "/token", "POST"); showSetlist(id, true); } catch (e) { toast(e.message, true); }
+  };
+  const del = el("button", "btn danger", "Obriši popis");
+  del.onclick = async () => {
+    if (!confirm("Obrisati popis „" + sl.title + "”? (pjesme ostaju u bazi)")) return;
+    try { await slApi("db/setlists/" + id, "DELETE"); showSetlists(); } catch (e) { toast(e.message, true); }
+  };
+  acts.append(pdf, txt, share, open, editor, relink, del);
+  box.append(acts);
+  const parts = [...SL_PARTS];
+  sl.items.forEach(it => { if (!parts.includes(it.part)) parts.push(it.part); });
+  parts.forEach(part => {
+    const row = el("div", "sl-part");
+    row.append(el("b", null, part || "Ostalo"));
+    const col = el("div");
+    sl.items.filter(it => it.part === part).forEach(it => {
+      const r = el("div", "sl-item");
+      const a = el("a", null, it.title); a.onclick = () => { state.tr[it.song_id] = it.transpose; openSong(it.song_id); };
+      r.append(a);
+      if (!it.has_text) r.append(el("span", "badge", "samo note"));
+      if (it.options.length) {
+        const sel = el("select"); sel.title = "Tonalitet za ovaj popis";
+        it.options.forEach(o => sel.append(new Option((o.n === 0 ? "izvorno" : (o.n > 0 ? "+" : "") + o.n) +
+                                                      (o.key ? " · " + o.key : ""), String(o.n))));
+        sel.value = String(it.transpose);
+        sel.onchange = async () => { try { await slApi("db/setlist-items/" + it.id, "PATCH", { transpose: Number(sel.value) });
+                                           showSetlist(id, true); } catch (e) { toast(e.message, true); } };
+        r.append(sel);
+      }
+      const up = el("button", "btn", "↑"), dn = el("button", "btn", "↓"), x = el("button", "btn danger", "✕");
+      up.onclick = async () => { await slApi("db/setlist-items/" + it.id + "/move", "POST", { step: -1 }); showSetlist(id, true); };
+      dn.onclick = async () => { await slApi("db/setlist-items/" + it.id + "/move", "POST", { step: 1 }); showSetlist(id, true); };
+      x.onclick = async () => { await slApi("db/setlist-items/" + it.id, "DELETE"); showSetlist(id, true); };
+      r.append(up, dn, x);
+      col.append(r);
+    });
+    const add = el("button", "btn", "＋ dodaj");
+    add.onclick = () => pickSong("Pjesma za: " + (part || "Ostalo"), null, async song => {
+      try { await slApi("db/setlists/" + id + "/items", "POST", { song_id: song.id, part });
+            showSetlist(id, true); }
+      catch (e) { toast(e.message, true); }
+    }, part);
+    col.append(add);
+    row.append(col);
+    box.append(row);
+  });
+  const other = el("button", "btn", "＋ Drugi dio (npr. Klanjanje, Na kraju)");
+  other.style.marginTop = ".6rem";
+  other.onclick = () => {
+    const part = (prompt("Naziv dijela:") || "").trim();
+    if (part) pickSong("Pjesma za: " + part, null, async song => {
+      try { await slApi("db/setlists/" + id + "/items", "POST", { song_id: song.id, part }); showSetlist(id, true); }
+      catch (e) { toast(e.message, true); }
+    });
+  };
+  box.append(other);
+  const top = $("main").scrollTop;
+  state.view = "setlist";
+  showView(box, keepScroll);
+  if (keepScroll) $("main").scrollTop = top;
+}
+async function addToSetlist(songId, tr) {
+  try {
+    const d = await json(await fetch("db/setlists"));
+    const modal = el("div", "modal"), win = el("div", "win"); win.style.width = "min(480px, 100%)";
+    const bar = el("div", "bar"); bar.append(el("b", null, "Dodaj u popis za misu"), el("span", "grow"));
+    const close = el("button", "btn", "✕"); close.onclick = () => modal.remove(); bar.append(close);
+    const body = el("div", "body");
+    const sel = el("select"); sel.style.width = "100%";
+    d.setlists.forEach(sl => sel.append(new Option(sl.title + (sl.date ? " · " + hrDate(sl.date) : ""), String(sl.id))));
+    sel.append(new Option("＋ Novi popis (Misa, " + hrDate(nextSunday()) + ")", "__new__"));
+    const part = el("select"); part.style.width = "100%"; part.style.marginTop = ".5rem";
+    d.parts.forEach(p => part.append(new Option(p, p)));
+    const ok = el("button", "btn primary", "Dodaj"); ok.style.marginTop = ".7rem";
+    ok.onclick = async () => {
+      try {
+        let sid = sel.value;
+        if (sid === "__new__") sid = (await slApi("db/setlists", "POST", { title: "Misa", date: nextSunday() })).setlist.id;
+        await slApi("db/setlists/" + sid + "/items", "POST", { song_id: songId, part: part.value, transpose: tr || 0 });
+        modal.remove(); toast("Dodano u popis.");
+      } catch (e) { toast(e.message, true); }
+    };
+    body.append(sel, part, ok);
+    win.append(bar, body); modal.append(win);
+    modal.onclick = e => { if (e.target === modal) modal.remove(); };
+    document.body.append(modal);
   } catch (e) { toast(e.message, true); }
 }
 
